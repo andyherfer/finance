@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 
-from options_strategy import OptionsStrategy
+from options_strategy import OptionsStrategy, BSOptionsStrategy
 
 
 class kde:
@@ -121,3 +121,15 @@ class OptionsMC(MonteCarlo):
         if profit > 0:
             return "green"
         return "red"
+
+    def display(self):
+        self.plot_strategy()
+        super().display()
+
+
+class BSOptionsMC(OptionsMC):
+    def __init__(self, ticker, sim_length=250 * 2, n_sims=1_000):
+        options_strategy = BSOptionsStrategy(ticker, days=sim_length)
+        series = options_strategy.get_price_series()
+        super().__init__(series, sim_length, n_sims)
+        self.options_strategy = options_strategy

@@ -113,3 +113,6 @@ class BSOptionsStrategy(OptionsStrategy):
             return result["call"]
         else:
             return result["put"]
+
+    def get_price_series(self):
+        return self.b_and_s.price_series

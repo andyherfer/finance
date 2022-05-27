@@ -50,6 +50,7 @@ class BlackAndScholes:
         self.days = days
         self.ticker_df = get_df(ticker, start_date_for_data)
         self.last_price = self.ticker_df["Close"][-1]
+        self.price_series = self.ticker_df["Close"]
 
     def price(self, r=None, days=None, strike=None):
         r = self.r if r is None else r
