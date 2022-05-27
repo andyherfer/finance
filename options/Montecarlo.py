@@ -43,6 +43,15 @@ class MonteCarlo:
         self.sims = None
 
     def simulate(self):
+        """
+        The simulate function simulates the price of a stock over time.
+        It takes as input a starting price and an expected volatility,
+        and returns a list containing the simulated prices using the method described here:
+
+        :param self: Reference the class
+        :return: A pandas dataframe with n_sims rows and sim_length columns
+        """
+
         price_series = pd.Series([self.start_price] * self.n_sims)
         samples = self.kde.sample(self.sim_length * self.n_sims)
         samples = pd.DataFrame(samples.reshape(self.sim_length, self.n_sims)) + 1
@@ -51,6 +60,15 @@ class MonteCarlo:
         return samples.cumprod()
 
     def display(self):
+        """
+        The display function displays the results of the Monte Carlo simulation.
+        It displays a histogram of the percentiles and prints out a table with
+        the mean, standard deviation, median, 5th percentile and 95th percentile.
+
+        :param self: Access the attributes and methods of the class in python
+        :return: The plots of the monte carlo simulation and the percentiles
+        """
+
         self.sims = self.simulate()
         self.plot_mc_brute()
         self.plot_mc_percentiles()
@@ -108,6 +126,16 @@ class OptionsMC(MonteCarlo):
         return self
 
     def simulate(self):
+        """
+        The simulate function is a wrapper for the superclass simulate function. It
+        applies the get_profit method from the OptionsStrategy class to each price in
+        the series returned by super().simulate().
+
+        :param self: Access the attributes and methods of the class in python
+        :return: A pandas series with the profit for each simulation
+        :doc-author: Trelent
+        """
+
         sims = super().simulate()
         sims = sims.apply(
             lambda series: series.apply(
@@ -123,6 +151,15 @@ class OptionsMC(MonteCarlo):
         return "red"
 
     def display(self):
+        """
+        The display function plots the strategies of each player and the payoff matrix.
+
+
+        :param self: Access the attributes and methods of the class in python
+        :return: The plot of the strategy
+        :doc-author: Trelent
+        """
+
         self.plot_strategy()
         super().display()
 

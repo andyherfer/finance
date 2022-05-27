@@ -5,6 +5,19 @@ from black_and_scholes import BlackAndScholes
 
 class Option:
     def __init__(self, strike, premium, side="long", kind="call"):
+        """
+        The __init__ function is called every time a new object is created.
+        The values we pass to __init__ are stored in the object and can be accessed later
+
+        :param self: Refer to the object itself
+        :param strike: Define the strike price of the option
+        :param premium: Set the price of the option
+        :param side=&quot;long&quot;: Indicate whether the option is held long or short
+        :param kind=&quot;call&quot;: Tell the class whether it is a call or put option
+        :return: The object of the class
+        :doc-author: Trelent
+        """
+
         self.strike = strike
         self.premium = premium
         self.side = side
@@ -54,6 +67,17 @@ class OptionsStrategy:
         return profit
 
     def add(self, *args, **kwargs):
+        """
+        The add function is called every time a new option is added.
+
+        :param self: Refer to the object itself
+        :param strike: Define the strike price of the option
+        :param premium: Set the price of the option
+        :param side=&quot;long&quot;: Indicate whether the option is held long or short
+        :param kind=&quot;call&quot;: Tell the class whether it is a call or put option
+        :return: The object of the class
+        :doc-author: Trelent
+        """
         self.options.append(Option(*args, **kwargs))
         return self
 
@@ -101,6 +125,17 @@ class BSOptionsStrategy(OptionsStrategy):
         )
 
     def add(self, *args, **kwargs):
+        """
+        The add function is called every time a new option is added.
+
+        :param self: Refer to the object itself
+        :param strike: Define the strike price of the option
+        :param premium: Set the price of the option
+        :param side=&quot;long&quot;: Indicate whether the option is held long or short
+        :param kind=&quot;call&quot;: Tell the class whether it is a call or put option
+        :return: The object of the class
+        :doc-author: Trelent
+        """
         if "strike" not in kwargs:
             kwargs["strike"] = self.b_and_s.last_price
         kwargs["premium"] = self.get_premium(kwargs)

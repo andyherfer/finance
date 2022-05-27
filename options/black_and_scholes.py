@@ -7,6 +7,22 @@ from Prices import get_df
 
 
 def price_option(ticker_df, strike=None, r=0.01988, days=365):
+    """
+    The price_option function computes the price of a call or put option given
+    the following parameters:
+        - ticker_df: A pandas DataFrame containing the daily stock prices for a specific ticker.
+        - strike (optional): The strike price of the option. If not provided, it will be set to S, where S is today's closing price.
+        - r (optional): The risk-free interest rate to discount at; defaults to 0.01988 (2% annual).
+
+         Returns a dictionary with two keys: &quot;call&quot; and &quot;put&quot;, each corresponding to their respective prices.
+
+    :param ticker_df: Get the dataframe of the ticker
+    :param strike=None: Indicate that the strike price is equal to the last closing price of the stock
+    :param r=0.01988: Calculate the discount factor for the future value of money
+    :param days=365: Calculate the time to maturity of the option
+    :return: A dictionary with the results of the calculation
+    """
+
     t = days / 365
     df = ticker_df.copy()
     results = {}
@@ -53,6 +69,18 @@ class BlackAndScholes:
         self.price_series = self.ticker_df["Close"]
 
     def price(self, r=None, days=None, strike=None):
+        """
+        The price function computes the price of a European call option given
+        the risk-free interest rate, days to expiration, and strike price.
+
+
+        :param self: Access variables that belongs to the class
+        :param r=None: Pass the interest rate used in the price function
+        :param days=None: Specify that the days parameter is optional
+        :param strike=None: Pass the strike price to the function
+        :return: The price of the option
+        """
+
         r = self.r if r is None else r
         days = self.days if days is None else days
         strike = self.strike if strike is None else strike
