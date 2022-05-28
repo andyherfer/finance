@@ -59,6 +59,7 @@ class Option:
 class OptionsStrategy:
     def __init__(self):
         self.options = []
+        self.premium = 0
 
     def get_profit(self, current_value):
         profit = 0
@@ -78,18 +79,22 @@ class OptionsStrategy:
         :return: The object of the class
         :doc-author: Trelent
         """
-        self.options.append(Option(*args, **kwargs))
+        option = Option(*args, **kwargs)
+        self.premium += option.premium
+        self.options.append(option)
         return self
 
     def remove(self, *args, **kwargs):
         option = Option(*args, **kwargs)
         for opt in self.options:
             if opt == option:
+                self.premium -= option.premium
                 self.options.remove(opt)
                 return self
 
     def clear(self):
         self.options = []
+        self.premium = 0
 
     def __repr__(self):
         return f"OptionsStrategy({self.options})"
@@ -123,6 +128,7 @@ class BSOptionsStrategy(OptionsStrategy):
         self.b_and_s = BlackAndScholes(
             ticker, start_date_for_data=start_date_for_data, r=r, days=days
         )
+        self.premium = 0
 
     def add(self, *args, **kwargs):
         """
@@ -136,10 +142,15 @@ class BSOptionsStrategy(OptionsStrategy):
         :return: The object of the class
         :doc-author: Trelent
         """
-        if "strike" not in kwargs:
+        if "strike" not in kwargs and "premium" not in kwargs:
             kwargs["strike"] = self.b_and_s.last_price
-        kwargs["premium"] = self.get_premium(kwargs)
-        self.options.append(Option(*args, **kwargs))
+        if "strike" not in kwargs and "premium" in kwargs:
+            kwargs["strike"] = self.get_strike(kwargs)
+        if "premium" not in kwargs:
+            kwargs["premium"] = self.get_premium(kwargs)
+        option = Option(*args, **kwargs)
+        self.premium += option.premium
+        self.options.append(option)
         return self
 
     def get_premium(self, kwargs):
@@ -148,6 +159,12 @@ class BSOptionsStrategy(OptionsStrategy):
             return result["call"]
         else:
             return result["put"]
+
+    def get_strike(self, kwargs):
+        if kwargs["kind"] == "call":
+            return self.b_and_s.look_for_strike(call=kwargs["premium"])
+        else:
+            return self.b_and_s.look_for_strike(put=kwargs["premium"])
 
     def get_price_series(self):
         return self.b_and_s.price_series

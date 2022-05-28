@@ -2,8 +2,34 @@ from statistics import NormalDist
 
 import numpy as np
 import pandas as pd
+from regex import R
 
 from Prices import get_df
+
+import sys
+
+
+class recursionlimit:
+    def __init__(self, limit):
+        self.limit = limit
+
+    def __enter__(self):
+        self.old_limit = sys.getrecursionlimit()
+        sys.setrecursionlimit(self.limit)
+
+    def __exit__(self, type, value, tb):
+        sys.setrecursionlimit(self.old_limit)
+
+
+def with_recursionlimit(limit):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            with recursionlimit(limit):
+                return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
 
 
 def price_option(ticker_df, strike=None, r=0.01988, days=365):
@@ -85,3 +111,58 @@ class BlackAndScholes:
         days = self.days if days is None else days
         strike = self.strike if strike is None else strike
         return price_option(self.ticker_df, strike, r, days)
+
+    @with_recursionlimit(10000)
+    def look_for_strike(
+        self, r=None, days=None, call=None, put=None, tolerance=0.00001
+    ):
+        assert (call is not None or put is not None) and not (
+            call is None and put is None
+        ), "You must pass the call xor put price"
+        r = self.r if r is None else r
+        days = self.days if days is None else days
+        if call:
+            return self.search_for_call(call, r, days, tolerance)
+        if put:
+            return self.search_for_put(put, r, days, tolerance)
+
+    def search_for_price(
+        self,
+        desired_premium,
+        r,
+        days,
+        tolerance=0.0001,
+        min_=None,
+        max_=None,
+        price_to_search="call",
+    ):
+        """
+        The search_for_price function searches for the strike price that gives the
+        desired price. Using Binary Search.
+
+
+        :param self: Access variables that belongs to the class
+        :param call: The call price
+        :param r: The risk-free interest rate
+        :param days: The time to maturity of the option
+        :return: The strike price that gives the desired call price
+        """
+        if max_ is None:
+            max_ = self.last_price * 10
+        if min_ is None:
+            min_ = self.last_price / 10
+        while max_ - min_ > tolerance:
+            mid = (max_ + min_) / 2
+            price = price_option(self.ticker_df, mid, r, days)
+            price = price[price_to_search]
+            if price > desired_premium:
+                max_ = mid
+            else:
+                min_ = mid
+        return mid
+
+    def search_for_call(self, call, r, days, tolerance=0.1):
+        return self.search_for_price(call, r, days, tolerance, price_to_search="call")
+
+    def search_for_put(self, put, r, days, tolerance=0.1):
+        return self.search_for_price(put, r, days, tolerance, price_to_search="put")
