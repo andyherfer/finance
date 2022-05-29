@@ -1,14 +1,14 @@
-# %%
-
+import sys
 from statistics import NormalDist
+import re
+
 from scipy.stats.distributions import chi2
 import numpy as np
 import pandas as pd
-from regex import R
+
 
 from Prices import get_df
-
-import sys
+from options_strategy import ExoticOption
 
 
 class recursionlimit:
@@ -32,6 +32,13 @@ def with_recursionlimit(limit):
         return wrapper
 
     return decorator
+
+
+def get_volatity(series):
+    price_mu = series.mean()
+    range = series.max() - series.min()
+    sigma = range / price_mu
+    return sigma
 
 
 def price_option(ticker_df, strike=None, r=0.01988, days=365):
@@ -83,18 +90,59 @@ def price_option(ticker_df, strike=None, r=0.01988, days=365):
     return results
 
 
+def price_exotic(
+    condition: str,
+    asset_series,
+    strike,
+    barrier,
+    rebate=0,
+    days=365,
+    cc_rate=4 / 100,
+    cc_carry=4 / 100,
+):
+    asset_price = asset_series[-1]
+    scalar_strike = strike
+    strike = strike / asset_price
+    asset_price = 1
+    sigma = get_volatity(asset_series)
+    args = [
+        "p",
+        condition,
+        asset_price,
+        strike,
+        barrier,
+        rebate,
+        days / 365,
+        cc_rate,
+        cc_carry,
+        sigma,
+    ]
+    value = EStandardBarrier(*args)
+    return scalar_strike * value
+
+
 class BlackAndScholes:
     def __init__(
-        self, ticker, start_date_for_data="29/03/2021", strike=None, r=0.01988, days=365
+        self,
+        ticker=None,
+        ticker_df=None,
+        start_date_for_data="29/03/2021",
+        strike=None,
+        r=0.01988,
+        days=365,
     ):
         self.ticker = ticker
         self.start_date_for_data = start_date_for_data
         self.strike = strike
         self.r = r
         self.days = days
-        self.ticker_df = get_df(ticker, start_date_for_data)
+        if ticker_df is None:
+            self.ticker_df = get_df(ticker, start_date_for_data)
+        else:
+            self.ticker_df = ticker_df
         self.last_price = self.ticker_df["Close"][-1]
         self.price_series = self.ticker_df["Close"]
+        self.volatility = get_volatity(self.price_series)
 
     def price(self, r=None, days=None, strike=None):
         """
@@ -113,6 +161,23 @@ class BlackAndScholes:
         days = self.days if days is None else days
         strike = self.strike if strike is None else strike
         return price_option(self.ticker_df, strike, r, days)
+
+    def price_exotic(
+        self, dummy_option: ExoticOption, rebate=0, cc_rate=4 / 100, cc_carry=4 / 100
+    ):
+        strike = dummy_option.strike
+        condition = dummy_option.condition
+        barrier = dummy_option.barrier
+        return price_exotic(
+            condition,
+            self.price_series,
+            strike,
+            barrier,
+            rebate=rebate,
+            days=self.days,
+            cc_rate=cc_rate,
+            cc_carry=cc_carry,
+        )
 
     @with_recursionlimit(10000)
     def look_for_strike(
@@ -170,7 +235,6 @@ class BlackAndScholes:
         return self.search_for_price(put, r, days, tolerance, price_to_search="put")
 
 
-# %%
 def Left(string, n):
     return string[:n]
 
@@ -223,7 +287,7 @@ def ESoftBarrier(
             SoftBarrier(TypeFlag, S + dS, X, L, U, T, r, b, v)
             - 2 * SoftBarrier(TypeFlag, S, X, L, U, T, r, b, v)
             + SoftBarrier(TypeFlag, S - dS, X, L, U, T, r, b, v)
-        ) / (dS ^ 2)
+        ) / (dS ** 2)
     elif OutPutFlag == "gp":  # GammaP
         ESoftBarrier = (
             S / 100 * ESoftBarrier("g", TypeFlag, S + dS, X, L, U, T, r, b, v)
@@ -238,7 +302,7 @@ def ESoftBarrier(
                 + 2 * SoftBarrier(TypeFlag, S, X, L, U, T, r, b, v - 0.01)
                 - SoftBarrier(TypeFlag, S - dS, X, L, U, T, r, b, v - 0.01)
             )
-            / (2 * 0.01 * dS ^ 2)
+            / (2 * 0.01 * dS ** 2)
             / 100
         )
     elif OutPutFlag == "v":  # Vega
@@ -248,10 +312,14 @@ def ESoftBarrier(
         ) / 2
     elif OutPutFlag == "dvdv":  # DVegaDVol/Vomma
         ESoftBarrier = (
-            SoftBarrier(TypeFlag, S, X, L, U, T, r, b, v + 0.01)
-            - 2 * SoftBarrier(TypeFlag, S, X, L, U, T, r, b, v)
-            + SoftBarrier(TypeFlag, S, X, L, U, T, r, b, v - 0.01)
-        ) / 0.01 ^ 2 / 10000
+            (
+                SoftBarrier(TypeFlag, S, X, L, U, T, r, b, v + 0.01)
+                - 2 * SoftBarrier(TypeFlag, S, X, L, U, T, r, b, v)
+                + SoftBarrier(TypeFlag, S, X, L, U, T, r, b, v - 0.01)
+            )
+            / 0.01 ** 2
+            / 10000
+        )
     elif OutPutFlag == "vp":  # VegaP
         ESoftBarrier = (
             v / 0.1 * ESoftBarrier("v", TypeFlag, S + dS, X, L, U, T, r, b, v)
@@ -290,7 +358,7 @@ def ESoftBarrier(
             SoftBarrier(TypeFlag, S, X + dS, L, U, T, r, b, v)
             - 2 * SoftBarrier(TypeFlag, S, X, L, U, T, r, b, v)
             + SoftBarrier(TypeFlag, S, X - dS, L, U, T, r, b, v)
-        ) / (dS ^ 2)
+        ) / (dS ** 2)
     return ESoftBarrier
 
 
@@ -323,16 +391,16 @@ def SoftBarrier(
     else:
         eta = -1
 
-    mu = (b + v ^ 2 / 2) / v ^ 2
-    Lambda1 = Exp(-1 / 2 * v ^ 2 * T * (mu + 0.5) * (mu - 0.5))
-    Lambda2 = Exp(-1 / 2 * v ^ 2 * T * (mu - 0.5) * (mu - 1.5))
-    d1 = Log(U ^ 2 / (S * X)) / (v * Sqr(T)) + mu * v * Sqr(T)
+    mu = (b + v ** 2 / 2) / v ** 2
+    Lambda1 = Exp(-1 / 2 * v ** 2 * T * (mu + 0.5) * (mu - 0.5))
+    Lambda2 = Exp(-1 / 2 * v ** 2 * T * (mu - 0.5) * (mu - 1.5))
+    d1 = Log(U ** 2 / (S * X)) / (v * Sqr(T)) + mu * v * Sqr(T)
     d2 = d1 - (mu + 0.5) * v * Sqr(T)
-    d3 = Log(U ^ 2 / (S * X)) / (v * Sqr(T)) + (mu - 1) * v * Sqr(T)
+    d3 = Log(U ** 2 / (S * X)) / (v * Sqr(T)) + (mu - 1) * v * Sqr(T)
     d4 = d3 - (mu - 0.5) * v * Sqr(T)
-    e1 = Log(L ^ 2 / (S * X)) / (v * Sqr(T)) + mu * v * Sqr(T)
+    e1 = Log(L ** 2 / (S * X)) / (v * Sqr(T)) + mu * v * Sqr(T)
     e2 = e1 - (mu + 0.5) * v * Sqr(T)
-    e3 = Log(L ^ 2 / (S * X)) / (v * Sqr(T)) + (mu - 1) * v * Sqr(T)
+    e3 = Log(L ** 2 / (S * X)) / (v * Sqr(T)) + (mu - 1) * v * Sqr(T)
     e4 = e3 - (mu - 0.5) * v * Sqr(T)
 
     Value = (
@@ -340,27 +408,27 @@ def SoftBarrier(
         * 1
         / (U - L)
         * (
-            S * Exp((b - r) * T) * S
-            ^ (-2 * mu) * (S * X)
-            ^ (mu + 0.5)
+            S
+            * Exp((b - r) * T)
+            * S ** (-2 * mu)
+            * (S * X) ** (mu + 0.5)
             / (2 * (mu + 0.5))
             * (
-                (U ^ 2 / (S * X))
-                ^ (mu + 0.5) * CND(eta * d1)
+                (U ** 2 / (S * X)) ** (mu + 0.5) * CND(eta * d1)
                 - Lambda1 * CND(eta * d2)
-                - (L ^ 2 / (S * X))
-                ^ (mu + 0.5) * CND(eta * e1) + Lambda1 * CND(eta * e2)
+                - (L ** 2 / (S * X)) ** (mu + 0.5) * CND(eta * e1)
+                + Lambda1 * CND(eta * e2)
             )
-            - X * Exp(-r * T) * S
-            ^ (-2 * (mu - 1)) * (S * X)
-            ^ (mu - 0.5)
+            - X
+            * Exp(-r * T)
+            * S ** (-2 * (mu - 1))
+            * (S * X) ** (mu - 0.5)
             / (2 * (mu - 0.5))
             * (
-                (U ^ 2 / (S * X))
-                ^ (mu - 0.5) * CND(eta * d3)
+                (U ** 2 / (S * X)) ** (mu - 0.5) * CND(eta * d3)
                 - Lambda2 * CND(eta * d4)
-                - (L ^ 2 / (S * X))
-                ^ (mu - 0.5) * CND(eta * e3) + Lambda2 * CND(eta * e4)
+                - (L ** 2 / (S * X)) ** (mu - 0.5) * CND(eta * e3)
+                + Lambda2 * CND(eta * e4)
             )
         )
     )
@@ -427,7 +495,7 @@ def ELookBarrier(
             LookBarrier(TypeFlag, S + dS, X, H, t1, T2, r, b, v)
             - 2 * LookBarrier(TypeFlag, S, X, H, t1, T2, r, b, v)
             + LookBarrier(TypeFlag, S - dS, X, H, t1, T2, r, b, v)
-        ) / (dS ^ 2)
+        ) / (dS ** 2)
 
     elif OutPutFlag == "gp":  # GammaP
         ELookBarrier = (
@@ -444,7 +512,7 @@ def ELookBarrier(
                 + 2 * LookBarrier(TypeFlag, S, X, H, t1, T2, r, b, v - 0.01)
                 - LookBarrier(TypeFlag, S - dS, X, H, t1, T2, r, b, v - 0.01)
             )
-            / (2 * 0.01 * dS ^ 2)
+            / (2 * 0.01 * dS ** 2)
             / 100
         )
     elif OutPutFlag == "v":  # Vega
@@ -460,10 +528,14 @@ def ELookBarrier(
 
     elif OutPutFlag == "dvdv":  # DvegaDvol/vomma
         ELookBarrier = (
-            LookBarrier(TypeFlag, S, X, H, t1, T2, r, b, v + 0.01)
-            - 2 * LookBarrier(TypeFlag, S, X, H, t1, T2, r, b, v)
-            + LookBarrier(TypeFlag, S, X, H, t1, T2, r, b, v - 0.01)
-        ) / 0.01 ^ 2 / 10000
+            (
+                LookBarrier(TypeFlag, S, X, H, t1, T2, r, b, v + 0.01)
+                - 2 * LookBarrier(TypeFlag, S, X, H, t1, T2, r, b, v)
+                + LookBarrier(TypeFlag, S, X, H, t1, T2, r, b, v - 0.01)
+            )
+            / 0.01 ** 2
+            / 10000
+        )
     elif OutPutFlag == "r":  # Rho
         ELookBarrier = (
             LookBarrier(TypeFlag, S, X, H, t1, T2, r + 0.01, b + 0.01, v)
@@ -499,7 +571,7 @@ def ELookBarrier(
             LookBarrier(TypeFlag, S, X + dS, H, t1, T2, r, b, v)
             - 2 * LookBarrier(TypeFlag, S, X, H, t1, T2, r, b, v)
             + LookBarrier(TypeFlag, S, X - dS, H, t1, T2, r, b, v)
-        ) / (dS ^ 2)
+        ) / (dS ** 2)
 
     return ELookBarrier
 
@@ -526,8 +598,8 @@ def LookBarrier(
 ):
     hh = Log(H / S)
     k = Log(X / S)
-    mu1 = b - v ^ 2 / 2
-    mu2 = b + v ^ 2 / 2
+    mu1 = b - v ** 2 / 2
+    mu2 = b + v ** 2 / 2
     rho = Sqr(t1 / T2)
 
     if TypeFlag in ["cuo", "cui"]:
@@ -539,29 +611,31 @@ def LookBarrier(
 
     g1 = (
         CND(eta * (hh - mu2 * t1) / (v * Sqr(t1)))
-        - Exp(2 * mu2 * hh / v ^ 2) * CND(eta * (-hh - mu2 * t1) / (v * Sqr(t1)))
+        - Exp(2 * mu2 * hh / v ** 2) * CND(eta * (-hh - mu2 * t1) / (v * Sqr(t1)))
     ) - (
         CND(eta * (m - mu2 * t1) / (v * Sqr(t1)))
-        - Exp(2 * mu2 * hh / v ^ 2) * CND(eta * (m - 2 * hh - mu2 * t1) / (v * Sqr(t1)))
+        - Exp(2 * mu2 * hh / v ** 2)
+        * CND(eta * (m - 2 * hh - mu2 * t1) / (v * Sqr(t1)))
     )
     g2 = (
         CND(eta * (hh - mu1 * t1) / (v * Sqr(t1)))
-        - Exp(2 * mu1 * hh / v ^ 2) * CND(eta * (-hh - mu1 * t1) / (v * Sqr(t1)))
+        - Exp(2 * mu1 * hh / v ** 2) * CND(eta * (-hh - mu1 * t1) / (v * Sqr(t1)))
     ) - (
         CND(eta * (m - mu1 * t1) / (v * Sqr(t1)))
-        - Exp(2 * mu1 * hh / v ^ 2) * CND(eta * (m - 2 * hh - mu1 * t1) / (v * Sqr(t1)))
+        - Exp(2 * mu1 * hh / v ** 2)
+        * CND(eta * (m - 2 * hh - mu1 * t1) / (v * Sqr(t1)))
     )
     part1 = (
         S
         * Exp((b - r) * T2)
-        * (1 + v ^ 2 / (2 * b))
+        * (1 + v ** 2 / (2 * b))
         * (
             CBND(
                 eta * (m - mu2 * t1) / (v * Sqr(t1)),
                 eta * (-k + mu2 * T2) / (v * Sqr(T2)),
                 -rho,
             )
-            - Exp(2 * mu2 * hh / v ^ 2)
+            - Exp(2 * mu2 * hh / v ** 2)
             * CBND(
                 eta * (m - 2 * hh - mu2 * t1) / (v * Sqr(t1)),
                 eta * (2 * hh - k + mu2 * T2) / (v * Sqr(T2)),
@@ -578,7 +652,7 @@ def LookBarrier(
                 eta * (-k + mu1 * T2) / (v * Sqr(T2)),
                 -rho,
             )
-            - Exp(2 * mu1 * hh / v ^ 2)
+            - Exp(2 * mu1 * hh / v ** 2)
             * CBND(
                 eta * (m - 2 * hh - mu1 * t1) / (v * Sqr(t1)),
                 eta * (2 * hh - k + mu1 * T2) / (v * Sqr(T2)),
@@ -586,29 +660,34 @@ def LookBarrier(
             )
         )
     )
-    part3 = -Exp(-r * T2) * v ^ 2 / (2 * b) * (
-        S * (S / X)
-        ^ (-2 * b / v ^ 2)
-        * CBND(
-            eta * (m + mu1 * t1) / (v * Sqr(t1)),
-            eta * (-k - mu1 * T2) / (v * Sqr(T2)),
-            -rho,
-        )
-        - H * (H / X)
-        ^ (-2 * b / v ^ 2)
-        * CBND(
-            eta * (m - 2 * hh + mu1 * t1) / (v * Sqr(t1)),
-            eta * (2 * hh - k - mu1 * T2) / (v * Sqr(T2)),
-            -rho,
+    part3 = (
+        -Exp(-r * T2)
+        * v ** 2
+        / (2 * b)
+        * (
+            S
+            * (S / X) ** (-2 * b / v ** 2)
+            * CBND(
+                eta * (m + mu1 * t1) / (v * Sqr(t1)),
+                eta * (-k - mu1 * T2) / (v * Sqr(T2)),
+                -rho,
+            )
+            - H
+            * (H / X) ** (-2 * b / v ** 2)
+            * CBND(
+                eta * (m - 2 * hh + mu1 * t1) / (v * Sqr(t1)),
+                eta * (2 * hh - k - mu1 * T2) / (v * Sqr(T2)),
+                -rho,
+            )
         )
     )
     part4 = (
         S
         * Exp((b - r) * T2)
         * (
-            (1 + v ^ 2 / (2 * b)) * CND(eta * mu2 * (T2 - t1) / (v * Sqr(T2 - t1)))
+            (1 + v ** 2 / (2 * b)) * CND(eta * mu2 * (T2 - t1) / (v * Sqr(T2 - t1)))
             + Exp(-b * (T2 - t1))
-            * (1 - v ^ 2 / (2 * b))
+            * (1 - v ** 2 / (2 * b))
             * CND(eta * (-mu1 * (T2 - t1)) / (v * Sqr(T2 - t1)))
         )
         * g1
@@ -676,7 +755,7 @@ def EPartialTimeBarrier(
             PartialTimeBarrier(TypeFlag, S + dS, X, H, t1, T2, r, b, v)
             - 2 * PartialTimeBarrier(TypeFlag, S, X, H, t1, T2, r, b, v)
             + PartialTimeBarrier(TypeFlag, S - dS, X, H, t1, T2, r, b, v)
-        ) / (dS ^ 2)
+        ) / (dS ** 2)
     elif OutPutFlag == "gp":  # GammaP
         EPartialTimeBarrier = (
             S / 100 * EPartialTimeBarrier("g", TypeFlag, S + dS, X, H, t1, T2, r, b, v)
@@ -691,7 +770,7 @@ def EPartialTimeBarrier(
                 + 2 * PartialTimeBarrier(TypeFlag, S, X, H, t1, T2, r, b, v - 0.01)
                 - PartialTimeBarrier(TypeFlag, S - dS, X, H, t1, T2, r, b, v - 0.01)
             )
-            / (2 * 0.01 * dS ^ 2)
+            / (2 * 0.01 * dS ** 2)
             / 100
         )
     elif OutPutFlag == "v":  # Vega
@@ -705,10 +784,14 @@ def EPartialTimeBarrier(
         )
     elif OutPutFlag == "dvdv":  # DvegaDvol/vomma
         EPartialTimeBarrier = (
-            PartialTimeBarrier(TypeFlag, S, X, H, t1, T2, r, b, v + 0.01)
-            - 2 * PartialTimeBarrier(TypeFlag, S, X, H, t1, T2, r, b, v)
-            + PartialTimeBarrier(TypeFlag, S, X, H, t1, T2, r, b, v - 0.01)
-        ) / 0.01 ^ 2 / 10000
+            (
+                PartialTimeBarrier(TypeFlag, S, X, H, t1, T2, r, b, v + 0.01)
+                - 2 * PartialTimeBarrier(TypeFlag, S, X, H, t1, T2, r, b, v)
+                + PartialTimeBarrier(TypeFlag, S, X, H, t1, T2, r, b, v - 0.01)
+            )
+            / 0.01 ** 2
+            / 10000
+        )
     elif OutPutFlag == "r":  # Rho
         EPartialTimeBarrier = (
             PartialTimeBarrier(TypeFlag, S, X, H, t1, T2, r + 0.01, b + 0.01, v)
@@ -749,7 +832,7 @@ def EPartialTimeBarrier(
             PartialTimeBarrier(TypeFlag, S, X + dS, H, t1, T2, r, b, v)
             - 2 * PartialTimeBarrier(TypeFlag, S, X, H, t1, T2, r, b, v)
             + PartialTimeBarrier(TypeFlag, S, X - dS, H, t1, T2, r, b, v)
-        ) / (dS ^ 2)
+        ) / (dS ** 2)
 
     return EPartialTimeBarrier
 
@@ -771,44 +854,44 @@ def PartialTimeBarrier(
     elif TypeFlag == "cuoA":
         eta = -1
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T2) / (v * Sqr(T2))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T2) / (v * Sqr(T2))
     d2 = d1 - v * Sqr(T2)
-    f1 = (Log(S / X) + 2 * Log(H / S) + (b + v ^ 2 / 2) * T2) / (v * Sqr(T2))
+    f1 = (Log(S / X) + 2 * Log(H / S) + (b + v ** 2 / 2) * T2) / (v * Sqr(T2))
     f2 = f1 - v * Sqr(T2)
-    e1 = (Log(S / H) + (b + v ^ 2 / 2) * t1) / (v * Sqr(t1))
+    e1 = (Log(S / H) + (b + v ** 2 / 2) * t1) / (v * Sqr(t1))
     e2 = e1 - v * Sqr(t1)
     e3 = e1 + 2 * Log(H / S) / (v * Sqr(t1))
     e4 = e3 - v * Sqr(t1)
-    mu = (b - v ^ 2 / 2) / v ^ 2
+    mu = (b - v ** 2 / 2) / v ** 2
     rho = Sqr(t1 / T2)
-    g1 = (Log(S / H) + (b + v ^ 2 / 2) * T2) / (v * Sqr(T2))
+    g1 = (Log(S / H) + (b + v ** 2 / 2) * T2) / (v * Sqr(T2))
     g2 = g1 - v * Sqr(T2)
     g3 = g1 + 2 * Log(H / S) / (v * Sqr(T2))
     g4 = g3 - v * Sqr(T2)
-    z1 = CND(e2) - (H / S) ^ (2 * mu) * CND(e4)
-    z2 = CND(-e2) - (H / S) ^ (2 * mu) * CND(-e4)
-    z3 = CBND(g2, e2, rho) - (H / S) ^ (2 * mu) * CBND(g4, -e4, -rho)
-    z4 = CBND(-g2, -e2, rho) - (H / S) ^ (2 * mu) * CBND(-g4, e4, -rho)
-    z5 = CND(e1) - (H / S) ^ (2 * (mu + 1)) * CND(e3)
-    z6 = CND(-e1) - (H / S) ^ (2 * (mu + 1)) * CND(-e3)
-    z7 = CBND(g1, e1, rho) - (H / S) ^ (2 * (mu + 1)) * CBND(g3, -e3, -rho)
-    z8 = CBND(-g1, -e1, rho) - (H / S) ^ (2 * (mu + 1)) * CBND(-g3, e3, -rho)
+    z1 = CND(e2) - (H / S) ** (2 * mu) * CND(e4)
+    z2 = CND(-e2) - (H / S) ** (2 * mu) * CND(-e4)
+    z3 = CBND(g2, e2, rho) - (H / S) ** (2 * mu) * CBND(g4, -e4, -rho)
+    z4 = CBND(-g2, -e2, rho) - (H / S) ** (2 * mu) * CBND(-g4, e4, -rho)
+    z5 = CND(e1) - (H / S) ** (2 * (mu + 1)) * CND(e3)
+    z6 = CND(-e1) - (H / S) ** (2 * (mu + 1)) * CND(-e3)
+    z7 = CBND(g1, e1, rho) - (H / S) ** (2 * (mu + 1)) * CBND(g3, -e3, -rho)
+    z8 = CBND(-g1, -e1, rho) - (H / S) ** (2 * (mu + 1)) * CBND(-g3, e3, -rho)
 
     if (
         TypeFlag == "cdoA" or TypeFlag == "cuoA"
     ):  # // call down-and out and up-and-out type A
         PartialTimeBarrier = S * Exp((b - r) * T2) * (
-            CBND(d1, eta * e1, eta * rho) - (H / S)
-            ^ (2 * (mu + 1)) * CBND(f1, eta * e3, eta * rho)
+            CBND(d1, eta * e1, eta * rho)
+            - (H / S) ** (2 * (mu + 1)) * CBND(f1, eta * e3, eta * rho)
         ) - X * Exp(-r * T2) * (
-            CBND(d2, eta * e2, eta * rho) - (H / S)
-            ^ (2 * mu) * CBND(f2, eta * e4, eta * rho)
+            CBND(d2, eta * e2, eta * rho)
+            - (H / S) ** (2 * mu) * CBND(f2, eta * e4, eta * rho)
         )
     elif TypeFlag == "cdoB2" and X < H:  # // call down-and-out type B2
         PartialTimeBarrier = S * Exp((b - r) * T2) * (
-            CBND(g1, e1, rho) - (H / S) ^ (2 * (mu + 1)) * CBND(g3, -e3, -rho)
+            CBND(g1, e1, rho) - (H / S) ** (2 * (mu + 1)) * CBND(g3, -e3, -rho)
         ) - X * Exp(-r * T2) * (
-            CBND(g2, e2, rho) - (H / S) ^ (2 * mu) * CBND(g4, -e4, -rho)
+            CBND(g2, e2, rho) - (H / S) ** (2 * mu) * CBND(g4, -e4, -rho)
         )
     elif TypeFlag == "cdoB2" and X > H:
         PartialTimeBarrier = PartialTimeBarrier("coB1", S, X, H, t1, T2, r, b, v)
@@ -816,43 +899,43 @@ def PartialTimeBarrier(
         PartialTimeBarrier = (
             S
             * Exp((b - r) * T2)
-            * (CBND(-g1, -e1, rho) - (H / S) ^ (2 * (mu + 1)) * CBND(-g3, e3, -rho))
+            * (CBND(-g1, -e1, rho) - (H / S) ** (2 * (mu + 1)) * CBND(-g3, e3, -rho))
             - X
             * Exp(-r * T2)
-            * (CBND(-g2, -e2, rho) - (H / S) ^ (2 * mu) * CBND(-g4, e4, -rho))
+            * (CBND(-g2, -e2, rho) - (H / S) ** (2 * mu) * CBND(-g4, e4, -rho))
             - S
             * Exp((b - r) * T2)
-            * (CBND(-d1, -e1, rho) - (H / S) ^ (2 * (mu + 1)) * CBND(e3, -f1, -rho))
+            * (CBND(-d1, -e1, rho) - (H / S) ** (2 * (mu + 1)) * CBND(e3, -f1, -rho))
             + X
             * Exp(-r * T2)
-            * (CBND(-d2, -e2, rho) - (H / S) ^ (2 * mu) * CBND(e4, -f2, -rho))
+            * (CBND(-d2, -e2, rho) - (H / S) ** (2 * mu) * CBND(e4, -f2, -rho))
         )
     elif TypeFlag == "coB1" and X > H:  # // call out type B1
         PartialTimeBarrier = S * Exp((b - r) * T2) * (
-            CBND(d1, e1, rho) - (H / S) ^ (2 * (mu + 1)) * CBND(f1, -e3, -rho)
+            CBND(d1, e1, rho) - (H / S) ** (2 * (mu + 1)) * CBND(f1, -e3, -rho)
         ) - X * Exp(-r * T2) * (
-            CBND(d2, e2, rho) - (H / S) ^ (2 * mu) * CBND(f2, -e4, -rho)
+            CBND(d2, e2, rho) - (H / S) ** (2 * mu) * CBND(f2, -e4, -rho)
         )
     elif TypeFlag == "coB1" and X < H:
         PartialTimeBarrier = (
             S
             * Exp((b - r) * T2)
-            * (CBND(-g1, -e1, rho) - (H / S) ^ (2 * (mu + 1)) * CBND(-g3, e3, -rho))
+            * (CBND(-g1, -e1, rho) - (H / S) ** (2 * (mu + 1)) * CBND(-g3, e3, -rho))
             - X
             * Exp(-r * T2)
-            * (CBND(-g2, -e2, rho) - (H / S) ^ (2 * mu) * CBND(-g4, e4, -rho))
+            * (CBND(-g2, -e2, rho) - (H / S) ** (2 * mu) * CBND(-g4, e4, -rho))
             - S
             * Exp((b - r) * T2)
-            * (CBND(-d1, -e1, rho) - (H / S) ^ (2 * (mu + 1)) * CBND(-f1, e3, -rho))
+            * (CBND(-d1, -e1, rho) - (H / S) ** (2 * (mu + 1)) * CBND(-f1, e3, -rho))
             + X
             * Exp(-r * T2)
-            * (CBND(-d2, -e2, rho) - (H / S) ^ (2 * mu) * CBND(-f2, e4, -rho))
+            * (CBND(-d2, -e2, rho) - (H / S) ** (2 * mu) * CBND(-f2, e4, -rho))
             + S
             * Exp((b - r) * T2)
-            * (CBND(g1, e1, rho) - (H / S) ^ (2 * (mu + 1)) * CBND(g3, -e3, -rho))
+            * (CBND(g1, e1, rho) - (H / S) ** (2 * (mu + 1)) * CBND(g3, -e3, -rho))
             - X
             * Exp(-r * T2)
-            * (CBND(g2, e2, rho) - (H / S) ^ (2 * mu) * CBND(g4, -e4, -rho))
+            * (CBND(g2, e2, rho) - (H / S) ** (2 * mu) * CBND(g4, -e4, -rho))
         )
     elif TypeFlag == "pdoA":  # // put down-and out and up-and-out type A
         PartialTimeBarrier = (
@@ -912,65 +995,65 @@ def DoubleBarrier(
 
     if TypeFlag in ["co", "ci"]:
         for n in range(-5, 5):
-            d1 = (Log(S * U ^ (2 * n) / (X * L ^ (2 * n))) + (b + v ^ 2 / 2) * T) / (
+            d1 = (Log(S * U ** (2 * n) / (X * L ** (2 * n))) + (b + v ** 2 / 2) * T) / (
                 v * Sqr(T)
             )
-            d2 = (Log(S * U ^ (2 * n) / (F * L ^ (2 * n))) + (b + v ^ 2 / 2) * T) / (
+            d2 = (Log(S * U ** (2 * n) / (F * L ** (2 * n))) + (b + v ** 2 / 2) * T) / (
                 v * Sqr(T)
             )
             d3 = (
-                Log(L ^ (2 * n + 2) / (X * S * U ^ (2 * n))) + (b + v ^ 2 / 2) * T
+                Log(L ** (2 * n + 2) / (X * S * U ** (2 * n))) + (b + v ** 2 / 2) * T
             ) / (v * Sqr(T))
             d4 = (
-                Log(L ^ (2 * n + 2) / (F * S * U ^ (2 * n))) + (b + v ^ 2 / 2) * T
+                Log(L ** (2 * n + 2) / (F * S * U ** (2 * n))) + (b + v ** 2 / 2) * T
             ) / (v * Sqr(T))
-            mu1 = 2 * (b - delta2 - n * (delta1 - delta2)) / v ^ 2 + 1
-            mu2 = 2 * n * (delta1 - delta2) / v ^ 2
-            mu3 = 2 * (b - delta2 + n * (delta1 - delta2)) / v ^ 2 + 1
+            mu1 = 2 * (b - delta2 - n * (delta1 - delta2)) / v ** 2 + 1
+            mu2 = 2 * n * (delta1 - delta2) / v ** 2
+            mu3 = 2 * (b - delta2 + n * (delta1 - delta2)) / v ** 2 + 1
             Sum1 = (
-                Sum1 + (U ^ n / L ^ n)
-                ^ mu1 * (L / S)
-                ^ mu2 * (CND(d1) - CND(d2)) - (L ^ (n + 1) / (U ^ n * S))
-                ^ mu3 * (CND(d3) - CND(d4))
+                Sum1
+                + (U ** n / L ** n) ** mu1 * (L / S) ** mu2 * (CND(d1) - CND(d2))
+                - (L ** (n + 1) / (U ** n * S)) ** mu3 * (CND(d3) - CND(d4))
             )
             Sum2 = (
-                Sum2 + (U ^ n / L ^ n)
-                ^ (mu1 - 2) * (L / S)
-                ^ mu2 * (CND(d1 - v * Sqr(T)) - CND(d2 - v * Sqr(T)))
-                - (L ^ (n + 1) / (U ^ n * S))
-                ^ (mu3 - 2) * (CND(d3 - v * Sqr(T)) - CND(d4 - v * Sqr(T)))
+                Sum2
+                + (U ** n / L ** n) ** (mu1 - 2)
+                * (L / S) ** mu2
+                * (CND(d1 - v * Sqr(T)) - CND(d2 - v * Sqr(T)))
+                - (L ** (n + 1) / (U ** n * S)) ** (mu3 - 2)
+                * (CND(d3 - v * Sqr(T)) - CND(d4 - v * Sqr(T)))
             )
         OutValue = S * Exp((b - r) * T) * Sum1 - X * Exp(-r * T) * Sum2
 
     elif TypeFlag in ["po", "pi"]:
         for n in range(-5, 5):
-            d1 = (Log(S * U ^ (2 * n) / (E * L ^ (2 * n))) + (b + v ^ 2 / 2) * T) / (
+            d1 = (Log(S * U ** (2 * n) / (E * L ** (2 * n))) + (b + v ** 2 / 2) * T) / (
                 v * Sqr(T)
             )
-            d2 = (Log(S * U ^ (2 * n) / (X * L ^ (2 * n))) + (b + v ^ 2 / 2) * T) / (
+            d2 = (Log(S * U ** (2 * n) / (X * L ** (2 * n))) + (b + v ** 2 / 2) * T) / (
                 v * Sqr(T)
             )
             d3 = (
-                Log(L ^ (2 * n + 2) / (E * S * U ^ (2 * n))) + (b + v ^ 2 / 2) * T
+                Log(L ** (2 * n + 2) / (E * S * U ** (2 * n))) + (b + v ** 2 / 2) * T
             ) / (v * Sqr(T))
             d4 = (
-                Log(L ^ (2 * n + 2) / (X * S * U ^ (2 * n))) + (b + v ^ 2 / 2) * T
+                Log(L ** (2 * n + 2) / (X * S * U ** (2 * n))) + (b + v ** 2 / 2) * T
             ) / (v * Sqr(T))
-            mu1 = 2 * (b - delta2 - n * (delta1 - delta2)) / v ^ 2 + 1
-            mu2 = 2 * n * (delta1 - delta2) / v ^ 2
-            mu3 = 2 * (b - delta2 + n * (delta1 - delta2)) / v ^ 2 + 1
+            mu1 = 2 * (b - delta2 - n * (delta1 - delta2)) / v ** 2 + 1
+            mu2 = 2 * n * (delta1 - delta2) / v ** 2
+            mu3 = 2 * (b - delta2 + n * (delta1 - delta2)) / v ** 2 + 1
             Sum1 = (
-                Sum1 + (U ^ n / L ^ n)
-                ^ mu1 * (L / S)
-                ^ mu2 * (CND(d1) - CND(d2)) - (L ^ (n + 1) / (U ^ n * S))
-                ^ mu3 * (CND(d3) - CND(d4))
+                Sum1
+                + (U ** n / L ** n) ** mu1 * (L / S) ** mu2 * (CND(d1) - CND(d2))
+                - (L ** (n + 1) / (U ** n * S)) ** mu3 * (CND(d3) - CND(d4))
             )
             Sum2 = (
-                Sum2 + (U ^ n / L ^ n)
-                ^ (mu1 - 2) * (L / S)
-                ^ mu2 * (CND(d1 - v * Sqr(T)) - CND(d2 - v * Sqr(T)))
-                - (L ^ (n + 1) / (U ^ n * S))
-                ^ (mu3 - 2) * (CND(d3 - v * Sqr(T)) - CND(d4 - v * Sqr(T)))
+                Sum2
+                + (U ** n / L ** n) ** (mu1 - 2)
+                * (L / S) ** mu2
+                * (CND(d1 - v * Sqr(T)) - CND(d2 - v * Sqr(T)))
+                - (L ** (n + 1) / (U ** n * S)) ** (mu3 - 2)
+                * (CND(d3 - v * Sqr(T)) - CND(d4 - v * Sqr(T)))
             )
         OutValue = X * Exp(-r * T) * Sum2 - S * Exp((b - r) * T) * Sum1
 
@@ -1001,11 +1084,11 @@ def StandardBarrier(
     #               5) "cdo"=Down-and-out call,   6) "cuo"=Up-out-in call
     #              7) "pdo"=Down-and-out put,    8) "puo"=Up-out-in put
 
-    mu = (b - v ^ 2 / 2) / v ^ 2
-    Lambda = Sqr(mu ^ 2 + 2 * r / v ^ 2)
+    mu = (b - v ** 2 / 2) / v ** 2
+    Lambda = Sqr(mu ** 2 + 2 * r / v ** 2)
     X1 = Log(S / X) / (v * Sqr(T)) + (1 + mu) * v * Sqr(T)
     X2 = Log(S / H) / (v * Sqr(T)) + (1 + mu) * v * Sqr(T)
-    y1 = Log(H ^ 2 / (S * X)) / (v * Sqr(T)) + (1 + mu) * v * Sqr(T)
+    y1 = Log(H ** 2 / (S * X)) / (v * Sqr(T)) + (1 + mu) * v * Sqr(T)
     y2 = Log(H / S) / (v * Sqr(T)) + (1 + mu) * v * Sqr(T)
     z = Log(H / S) / (v * Sqr(T)) + Lambda * v * Sqr(T)
 
@@ -1028,28 +1111,23 @@ def StandardBarrier(
     f2 = phi * S * Exp((b - r) * T) * CND(phi * X2) - phi * X * Exp(-r * T) * CND(
         phi * X2 - phi * v * Sqr(T)
     )
-    f3 = (
-        phi * S * Exp((b - r) * T) * (H / S)
-        ^ (2 * (mu + 1)) * CND(eta * y1) - phi * X * Exp(-r * T) * (H / S)
-        ^ (2 * mu) * CND(eta * y1 - eta * v * Sqr(T))
-    )
-    f4 = (
-        phi * S * Exp((b - r) * T) * (H / S)
-        ^ (2 * (mu + 1)) * CND(eta * y2) - phi * X * Exp(-r * T) * (H / S)
-        ^ (2 * mu) * CND(eta * y2 - eta * v * Sqr(T))
-    )
+    f3 = phi * S * Exp((b - r) * T) * (H / S) ** (2 * (mu + 1)) * CND(
+        eta * y1
+    ) - phi * X * Exp(-r * T) * (H / S) ** (2 * mu) * CND(eta * y1 - eta * v * Sqr(T))
+    f4 = phi * S * Exp((b - r) * T) * (H / S) ** (2 * (mu + 1)) * CND(
+        eta * y2
+    ) - phi * X * Exp(-r * T) * (H / S) ** (2 * mu) * CND(eta * y2 - eta * v * Sqr(T))
     f5 = (
         k
         * Exp(-r * T)
         * (
-            CND(eta * X2 - eta * v * Sqr(T)) - (H / S)
-            ^ (2 * mu) * CND(eta * y2 - eta * v * Sqr(T))
+            CND(eta * X2 - eta * v * Sqr(T))
+            - (H / S) ** (2 * mu) * CND(eta * y2 - eta * v * Sqr(T))
         )
     )
     f6 = k * (
-        (H / S)
-        ^ (mu + Lambda) * CND(eta * z) + (H / S)
-        ^ (mu - Lambda) * CND(eta * z - 2 * eta * Lambda * v * Sqr(T))
+        (H / S) ** (mu + Lambda) * CND(eta * z)
+        + (H / S) ** (mu - Lambda) * CND(eta * z - 2 * eta * Lambda * v * Sqr(T))
     )
 
     if X > H:
@@ -1153,7 +1231,7 @@ def EDoubleBarrier(
             DoubleBarrier(TypeFlag, S + dS, X, L, U, T, r, b, v, delta1, delta2)
             - 2 * DoubleBarrier(TypeFlag, S, X, L, U, T, r, b, v, delta1, delta2)
             + DoubleBarrier(TypeFlag, S - dS, X, L, U, T, r, b, v, delta1, delta2)
-        ) / (dS ^ 2)
+        ) / (dS ** 2)
     elif OutPutFlag == "gp":  # GammaP
         EDoubleBarrier = (
             S
@@ -1180,7 +1258,7 @@ def EDoubleBarrier(
                     TypeFlag, S - dS, X, L, U, T, r, b, v - 0.01, delta1, delta2
                 )
             )
-            / (2 * 0.01 * dS ^ 2)
+            / (2 * 0.01 * dS ** 2)
             / 100
         )
     elif OutPutFlag == "v":  # Vega
@@ -1190,10 +1268,14 @@ def EDoubleBarrier(
         ) / 2
     elif OutPutFlag == "dvdv":  # DVegaDVol/Vomma
         EDoubleBarrier = (
-            DoubleBarrier(TypeFlag, S, X, L, U, T, r, b, v + 0.01, delta1, delta2)
-            - 2 * DoubleBarrier(TypeFlag, S, X, L, U, T, r, b, v, delta1, delta2)
-            + DoubleBarrier(TypeFlag, S, X, L, U, T, r, b, v - 0.01, delta1, delta2)
-        ) / 0.01 ^ 2 / 10000
+            (
+                DoubleBarrier(TypeFlag, S, X, L, U, T, r, b, v + 0.01, delta1, delta2)
+                - 2 * DoubleBarrier(TypeFlag, S, X, L, U, T, r, b, v, delta1, delta2)
+                + DoubleBarrier(TypeFlag, S, X, L, U, T, r, b, v - 0.01, delta1, delta2)
+            )
+            / 0.01 ** 2
+            / 10000
+        )
     elif OutPutFlag == "vp":  # VegaP
         EDoubleBarrier = (
             v
@@ -1245,7 +1327,7 @@ def EDoubleBarrier(
             DoubleBarrier(TypeFlag, S, X + dS, L, U, T, r, b, v, delta1, delta2)
             - 2 * DoubleBarrier(TypeFlag, S, X, L, U, T, r, b, v, delta1, delta2)
             + DoubleBarrier(TypeFlag, S, X - dS, L, U, T, r, b, v, delta1, delta2)
-        ) / (dS ^ 2)
+        ) / (dS ** 2)
     return EDoubleBarrier
 
 
@@ -1285,7 +1367,7 @@ def EStandardBarrier(
         return EStandardBarrier
 
     if OutPutFlag == "p":  # Value
-        EStandardBarrier == StandardBarrier(TypeFlag, S, X, H, k, T, r, b, v)
+        EStandardBarrier = StandardBarrier(TypeFlag, S, X, H, k, T, r, b, v)
     elif OutPutFlag == "d":  # Delta
         EStandardBarrier = (
             StandardBarrier(TypeFlag, S + dS, X, H, k, T, r, b, v)
@@ -1308,7 +1390,7 @@ def EStandardBarrier(
             StandardBarrier(TypeFlag, S + dS, X, H, k, T, r, b, v)
             - 2 * StandardBarrier(TypeFlag, S, X, H, k, T, r, b, v)
             + StandardBarrier(TypeFlag, S - dS, X, H, k, T, r, b, v)
-        ) / (dS ^ 2)
+        ) / (dS ** 2)
     elif OutPutFlag == "gp":  # GammaP
         EStandardBarrier = (
             S / 100 * EStandardBarrier("g", TypeFlag, S + dS, X, H, k, T, r, b, v)
@@ -1323,7 +1405,7 @@ def EStandardBarrier(
                 + 2 * StandardBarrier(TypeFlag, S, X, H, k, T, r, b, v - 0.01)
                 - StandardBarrier(TypeFlag, S - dS, X, H, k, T, r, b, v - 0.01)
             )
-            / (2 * 0.01 * dS ^ 2)
+            / (2 * 0.01 * dS ** 2)
             / 100
         )
     elif OutPutFlag == "v":  # Vega
@@ -1337,10 +1419,14 @@ def EStandardBarrier(
         )
     elif OutPutFlag == "dvdv":  # DvegaDvol/vomma
         EStandardBarrier = (
-            StandardBarrier(TypeFlag, S, X, H, k, T, r, b, v + 0.01)
-            - 2 * StandardBarrier(TypeFlag, S, X, H, k, T, r, b, v)
-            + StandardBarrier(TypeFlag, S, X, H, k, T, r, b, v - 0.01)
-        ) / 0.01 ^ 2 / 10000
+            (
+                StandardBarrier(TypeFlag, S, X, H, k, T, r, b, v + 0.01)
+                - 2 * StandardBarrier(TypeFlag, S, X, H, k, T, r, b, v)
+                + StandardBarrier(TypeFlag, S, X, H, k, T, r, b, v - 0.01)
+            )
+            / 0.01 ** 2
+            / 10000
+        )
     elif OutPutFlag == "r":  # Rho
         EStandardBarrier = (
             StandardBarrier(TypeFlag, S, X, H, k, T, r + 0.01, b + 0.01, v)
@@ -1380,7 +1466,7 @@ def EStandardBarrier(
             StandardBarrier(TypeFlag, S, X + dS, H, k, T, r, b, v)
             - 2 * StandardBarrier(TypeFlag, S, X, H, k, T, r, b, v)
             + StandardBarrier(TypeFlag, S, X - dS, H, k, T, r, b, v)
-        ) / (dS ^ 2)
+        ) / (dS ** 2)
 
     return EStandardBarrier
 
@@ -1399,7 +1485,7 @@ def CND(X: float):
     if y > 37:
         CND = 0
     else:
-        Exponential = Exp(-y ^ 2 / 2)
+        Exponential = Exp(-(y ** 2) / 2)
         if y < 7.07106781186547:
             SumA = 0.0352624965998911 * y + 0.700383064443688
             SumA = SumA * y + 6.37396220353165
@@ -1498,7 +1584,7 @@ def CBND(X: float, y: float, rho: float):
     if abs(rho) < 1:
         Ass = (1 - rho) * (1 + rho)
         A = Sqr(Ass)
-        bs = (H - k) ^ 2
+        bs = (H - k) ** 2
         c = (4 - hk) / 8
         d = (12 - hk) / 16
         asr = -(bs / Ass + hk) / 2
@@ -1517,7 +1603,7 @@ def CBND(X: float, y: float, rho: float):
         A = A / 2
         for i in range(1, LG):
             for ISs in range(-1, 1, 2):
-                xs = (A * (ISs * XX(i, NG) + 1)) ^ 2
+                xs = (A * (ISs * XX(i, NG) + 1)) ** 2
                 rs = Sqr(1 - xs)
                 asr = -(bs / xs + hk) / 2
                 if asr > -100:
@@ -1572,7 +1658,7 @@ def EGBlackScholes(
     elif OutPutFlag == "dt":  # DDeltaDtime/Charm
         EGBlackScholes = GDdeltaDtime(CallPutFlag, S, X, T, r, b, v) / 365
     elif OutPutFlag == "dmx":
-        EGBlackScholes = S ^ 2 / X * Exp((2 * b + v ^ 2) * T)
+        EGBlackScholes = S ** 2 / X * Exp((2 * b + v ** 2) * T)
     elif OutPutFlag == "e":  # Elasticity
         EGBlackScholes = GElasticity(CallPutFlag, S, X, T, r, b, v)
 
@@ -1680,17 +1766,17 @@ def EGBlackScholes(
 
     # CALCULATIONS
     elif OutPutFlag == "d1":  # d1
-        EGBlackScholes = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+        EGBlackScholes = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     elif OutPutFlag == "d2":  # d2
-        EGBlackScholes = (Log(S / X) + (b - v ^ 2 / 2) * T) / (v * Sqr(T))
+        EGBlackScholes = (Log(S / X) + (b - v ** 2 / 2) * T) / (v * Sqr(T))
     elif OutPutFlag == "nd1":  # n(d1)
-        EGBlackScholes = ND((Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T)))
+        EGBlackScholes = ND((Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T)))
     elif OutPutFlag == "nd2":  # n(d2)
-        EGBlackScholes = ND((Log(S / X) + (b - v ^ 2 / 2) * T) / (v * Sqr(T)))
+        EGBlackScholes = ND((Log(S / X) + (b - v ** 2 / 2) * T) / (v * Sqr(T)))
     elif OutPutFlag == "CNDd1":  # N(d1)
-        EGBlackScholes = CND((Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T)))
+        EGBlackScholes = CND((Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T)))
     elif OutPutFlag == "CNDd2":  # N(d2)
-        EGBlackScholes = CND((Log(S / X) + (b - v ^ 2 / 2) * T) / (v * Sqr(T)))
+        EGBlackScholes = CND((Log(S / X) + (b - v ** 2 / 2) * T) / (v * Sqr(T)))
     return EGBlackScholes
 
 
@@ -1726,7 +1812,7 @@ def BisectionAlgorithm(
 # Black and Scholes (1973) Stock options, on non dividend paying stock
 def BlackScholes(CallPutFlag: str, S: float, X: float, T: float, r: float, v: float):
 
-    d1 = (Log(S / X) + (r + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (r + v ** 2 / 2) * T) / (v * Sqr(T))
     d2 = d1 - v * Sqr(T)
     if CallPutFlag == "c":
         BlackScholes = S * CND(d1) - X * Exp(-r * T) * CND(d2)
@@ -1739,7 +1825,7 @@ def BlackScholes(CallPutFlag: str, S: float, X: float, T: float, r: float, v: fl
 def Merton73(
     CallPutFlag: str, S: float, X: float, T: float, r: float, q: float, v: float
 ):
-    d1 = (Log(S / X) + (r - q + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (r - q + v ** 2 / 2) * T) / (v * Sqr(T))
     d2 = d1 - v * Sqr(T)
     if CallPutFlag == "c":
         Merton73 = S * Exp(-q * T) * CND(d1) - X * Exp(-r * T) * CND(d2)
@@ -1750,7 +1836,7 @@ def Merton73(
 
 # Black (1976) Options on futures/forwards
 def Black76(CallPutFlag: str, f: float, X: float, T: float, r: float, v: float):
-    d1 = (Log(f / X) + (v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(f / X) + (v ** 2 / 2) * T) / (v * Sqr(T))
     d2 = d1 - v * Sqr(T)
     if CallPutFlag == "c":
         Black76 = Exp(-r * T) * (f * CND(d1) - X * CND(d2))
@@ -1763,7 +1849,7 @@ def Black76(CallPutFlag: str, f: float, X: float, T: float, r: float, v: float):
 def GarmanKolhagen(
     CallPutFlag: str, S: float, X: float, T: float, r: float, rf: float, v: float
 ):
-    d1 = (Log(S / X) + (r - rf + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (r - rf + v ** 2 / 2) * T) / (v * Sqr(T))
     d2 = d1 - v * Sqr(T)
     if CallPutFlag == "c":
         GarmanKolhagen = S * Exp(-rf * T) * CND(d1) - X * Exp(-r * T) * CND(d2)
@@ -1776,7 +1862,7 @@ def GarmanKolhagen(
 def GBlackScholes(
     CallPutFlag: str, S: float, X: float, T: float, r: float, b: float, v: float
 ):
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     d2 = d1 - v * Sqr(T)
 
     if CallPutFlag == "c":
@@ -1852,9 +1938,9 @@ def MaxDdeltaDvolAsset(
     # UpperLowerFlag"l" gives upper asset level that gives max DdeltaDvol
 
     if UpperLowerFlag == "l":
-        MaxDdeltaDvolAsset = X * Exp(-b * T - v * Sqr(T) * Sqr(4 + T * v ^ 2) / 2)
+        MaxDdeltaDvolAsset = X * Exp(-b * T - v * Sqr(T) * Sqr(4 + T * v ** 2) / 2)
     elif UpperLowerFlag == "u":
-        MaxDdeltaDvolAsset = X * Exp(-b * T + v * Sqr(T) * Sqr(4 + T * v ^ 2) / 2)
+        MaxDdeltaDvolAsset = X * Exp(-b * T + v * Sqr(T) * Sqr(4 + T * v ** 2) / 2)
     return MaxDdeltaDvolAsset
 
 
@@ -1867,9 +1953,9 @@ def MaxDdeltaDvolStrike(
     # UpperLowerFlag"l" gives upper strike level that gives max DdeltaDvol
 
     if UpperLowerFlag == "l":
-        MaxDdeltaDvolStrike = S * Exp(b * T - v * Sqr(T) * Sqr(4 + T * v ^ 2) / 2)
+        MaxDdeltaDvolStrike = S * Exp(b * T - v * Sqr(T) * Sqr(4 + T * v ** 2) / 2)
     elif UpperLowerFlag == "u":
-        MaxDdeltaDvolStrike = S * Exp(b * T + v * Sqr(T) * Sqr(4 + T * v ^ 2) / 2)
+        MaxDdeltaDvolStrike = S * Exp(b * T + v * Sqr(T) * Sqr(4 + T * v ** 2) / 2)
     return MaxDdeltaDvolStrike
 
 
@@ -1902,7 +1988,7 @@ def GForwardDelta(
     CallPutFlag: str, S: float, X: float, T: float, r: float, b: float, v: float
 ) -> float:
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
 
     if CallPutFlag == "c":
         GForwardDelta = Exp(-r * T) * CND(d1)
@@ -1915,7 +2001,7 @@ def GForwardDelta(
 def GDzetaDvol(
     CallPutFlag: str, S: float, X: float, T: float, r: float, b: float, v: float
 ) -> float:
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     d2 = d1 - v * Sqr(T)
     if CallPutFlag == "c":
         GDzetaDvol = -ND(d2) * d1 / v
@@ -1929,7 +2015,7 @@ def GDzetaDtime(
     CallPutFlag: str, S: float, X: float, T: float, r: float, b: float, v: float
 ) -> float:
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     d2 = d1 - v * Sqr(T)
     if CallPutFlag == "c":
         GDzetaDtime = ND(d2) * (b / (v * Sqr(T)) - d1 / (2 * T))
@@ -1942,7 +2028,7 @@ def GDzetaDtime(
 def GInTheMoneyProbability(
     CallPutFlag: str, S: float, X: float, T: float, b: float, v: float
 ) -> float:
-    d2 = (Log(S / X) + (b - v ^ 2 / 2) * T) / (v * Sqr(T))
+    d2 = (Log(S / X) + (b - v ** 2 / 2) * T) / (v * Sqr(T))
 
     if CallPutFlag == "c":
         GInTheMoneyProbability = CND(d2)
@@ -1958,11 +2044,11 @@ def GBreakEvenProbability(
 
     if CallPutFlag == "c":
         X = X + GBlackScholes("c", S, X, T, r, b, v) * Exp(r * T)
-        d2 = (Log(S / X) + (b - v ^ 2 / 2) * T) / (v * Sqr(T))
+        d2 = (Log(S / X) + (b - v ** 2 / 2) * T) / (v * Sqr(T))
         GBreakEvenProbability = CND(d2)
     elif CallPutFlag == "p":
         X = X - GBlackScholes("p", S, X, T, r, b, v) * Exp(r * T)
-        d2 = (Log(S / X) + (b - v ^ 2 / 2) * T) / (v * Sqr(T))
+        d2 = (Log(S / X) + (b - v ** 2 / 2) * T) / (v * Sqr(T))
         GBreakEvenProbability = CND(-d2)
 
     return GBreakEvenProbability
@@ -2037,32 +2123,32 @@ def GDeltaFromInTheMoneyProb(
 
 # MirrorDeltaStrike, delta neutral straddle strike in the BSM formula
 def GDeltaMirrorStrike(S: float, T: float, b: float, v: float):
-    GDeltaMirrorStrike = S * Exp((b + v ^ 2 / 2) * T)
+    GDeltaMirrorStrike = S * Exp((b + v ** 2 / 2) * T)
     return GDeltaMirrorStrike
 
 
 # MirrorProbabilityStrike, probability neutral straddle strike in the BSM formula
 def GProbabilityMirrorStrike(S: float, T: float, b: float, v: float):
-    GProbabilityMirrorStrike = S * Exp((b - v ^ 2 / 2) * T)
+    GProbabilityMirrorStrike = S * Exp((b - v ** 2 / 2) * T)
     return GProbabilityMirrorStrike
 
 
 # MirrorDeltaStrike, general delta symmmetric strike in the BSM formula
 def GDeltaMirrorCallPutStrike(S: float, X: float, T: float, b: float, v: float):
-    GDeltaMirrorCallPutStrike = S ^ 2 / X * Exp((2 * b + v ^ 2) * T)
+    GDeltaMirrorCallPutStrike = S ** 2 / X * Exp((2 * b + v ** 2) * T)
     return GDeltaMirrorCallPutStrike
 
 
 # Gamma for the generalized Black and Scholes formula
 def GGamma(S: float, X: float, T: float, r: float, b: float, v: float):
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     GGamma = Exp((b - r) * T) * ND(d1) / (S * v * Sqr(T))
     return GGamma
 
 
 # SaddleGamma for the generalized Black and Scholes formula
 def GSaddleGamma(X: float, T: float, r: float, b: float, v: float):
-    GSaddleGamma = Sqr(Exp(1) / np.pi) * Sqr((2 * b - r) / v ^ 2 + 1) / X
+    GSaddleGamma = Sqr(Exp(1) / np.pi) * Sqr((2 * b - r) / v ** 2 + 1) / X
     return GSaddleGamma
 
 
@@ -2077,7 +2163,7 @@ def GDelta(
     CallPutFlag: str, S: float, X: float, T: float, r: float, b: float, v: float
 ):
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     if CallPutFlag == "c":
         GDelta = Exp((b - r) * T) * CND(d1)
     else:
@@ -2090,7 +2176,7 @@ def GStrikeDelta(
     CallPutFlag: str, S: float, X: float, T: float, r: float, b: float, v: float
 ):
 
-    d2 = (Log(S / X) + (b - v ^ 2 / 2) * T) / (v * Sqr(T))
+    d2 = (Log(S / X) + (b - v ** 2 / 2) * T) / (v * Sqr(T))
     if CallPutFlag == "c":
         GStrikeDelta = -Exp(-r * T) * CND(d2)
     else:
@@ -2114,7 +2200,7 @@ def GElasticity(
 # DgammaDvol/Zomma for the generalized Black and Scholes formula
 def GDgammaDvol(S: float, X: float, T: float, r: float, b: float, v: float):
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     d2 = d1 - v * Sqr(T)
     GDgammaDvol = GGamma(S, X, T, r, b, v) * ((d1 * d2 - 1) / v)
     return GDgammaDvol
@@ -2123,7 +2209,7 @@ def GDgammaDvol(S: float, X: float, T: float, r: float, b: float, v: float):
 # DgammaPDvol for the generalized Black and Scholes formula
 def GDgammaPDvol(S: float, X: float, T: float, r: float, b: float, v: float):
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     d2 = d1 - v * Sqr(T)
     GDgammaPDvol = S / 100 * GGamma(S, X, T, r, b, v) * ((d1 * d2 - 1) / v)
     return GDgammaPDvol
@@ -2132,7 +2218,7 @@ def GDgammaPDvol(S: float, X: float, T: float, r: float, b: float, v: float):
 # DgammaDspot/Speed for the generalized Black and Scholes formula
 def GDgammaDspot(S: float, X: float, T: float, r: float, b: float, v: float):
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
 
     GDgammaDspot = -GGamma(S, X, T, r, b, v) * (1 + d1 / (v * Sqr(T))) / S
     return GDgammaDspot
@@ -2141,7 +2227,7 @@ def GDgammaDspot(S: float, X: float, T: float, r: float, b: float, v: float):
 # DgammaPDspot/SpeedP for the generalized Black and Scholes formula
 def GDgammaPDspot(S: float, X: float, T: float, r: float, b: float, v: float):
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
 
     GDgammaPDspot = -GGamma(S, X, T, r, b, v) * (d1) / (100 * v * Sqr(T))
     return GDgammaPDspot
@@ -2150,7 +2236,7 @@ def GDgammaPDspot(S: float, X: float, T: float, r: float, b: float, v: float):
 # Risk Neutral Denisty for the generalized Black and Scholes formula
 def GRiskNeutralDensity(S: float, X: float, T: float, r: float, b: float, v: float):
 
-    d2 = (Log(S / X) + (b - v ^ 2 / 2) * T) / (v * Sqr(T))
+    d2 = (Log(S / X) + (b - v ** 2 / 2) * T) / (v * Sqr(T))
     GRiskNeutralDensity = Exp(-r * T) * ND(d2) / (X * v * Sqr(T))
     return GRiskNeutralDensity
 
@@ -2178,7 +2264,7 @@ def GTheta(
     CallPutFlag: str, S: float, X: float, T: float, r: float, b: float, v: float
 ):
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     d2 = d1 - v * Sqr(T)
 
     if CallPutFlag == "c":
@@ -2199,7 +2285,7 @@ def GTheta(
 # Drift-less Theta for the generalized Black and Scholes formula
 def GThetaDriftLess(S: float, X: float, T: float, r: float, b: float, v: float):
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     GThetaDriftLess = -S * Exp((b - r) * T) * ND(d1) * v / (2 * Sqr(T))
     return GThetaDriftLess
 
@@ -2207,7 +2293,7 @@ def GThetaDriftLess(S: float, X: float, T: float, r: float, b: float, v: float):
 # Variance-vega for the generalized Black and Scholes formula
 def GVarianceVega(S: float, X: float, T: float, r: float, b: float, v: float):
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     GVarianceVega = S * Exp((b - r) * T) * ND(d1) * Sqr(T) / (2 * v)
     return GVarianceVega
 
@@ -2215,10 +2301,10 @@ def GVarianceVega(S: float, X: float, T: float, r: float, b: float, v: float):
 # Variance-vomma for the generalized Black and Scholes formula
 def GVarianceVomma(S: float, X: float, T: float, r: float, b: float, v: float):
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     d2 = d1 - v * Sqr(T)
     GVarianceVomma = (
-        S * Exp((b - r) * T) * Sqr(T) / (4 * v ^ 3) * ND(d1) * (d1 * d2 - 1)
+        S * Exp((b - r) * T) * Sqr(T) / (4 * v ** 3) * ND(d1) * (d1 * d2 - 1)
     )
     return GVarianceVomma
 
@@ -2226,16 +2312,16 @@ def GVarianceVomma(S: float, X: float, T: float, r: float, b: float, v: float):
 # Variance-delta for the generalized Black and Scholes formula
 def GVarianceDelta(S: float, X: float, T: float, r: float, b: float, v: float):
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     d2 = d1 - v * Sqr(T)
-    GVarianceDelta = S * Exp((b - r) * T) * ND(d1) * (-d2) / (2 * v ^ 2)
+    GVarianceDelta = S * Exp((b - r) * T) * ND(d1) * (-d2) / (2 * v ** 2)
     return GVarianceDelta
 
 
 # Vega for the generalized Black and Scholes formula
 def GVega(S: float, X: float, T: float, r: float, b: float, v: float):
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     GVega = S * Exp((b - r) * T) * ND(d1) * Sqr(T)
     return GVega
 
@@ -2252,7 +2338,7 @@ def GDdeltaDtime(
     CallPutFlag: str, S: float, X: float, T: float, r: float, b: float, v: float
 ):
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     d2 = d1 - v * Sqr(T)
 
     if CallPutFlag == "c":
@@ -2295,7 +2381,7 @@ def GProfitLossSTD(
 # DvegaDvol/Vomma for the generalized Black and Scholes formula
 def GDvegaDvol(S: float, X: float, T: float, r: float, b: float, v: float):
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     d2 = d1 - v * Sqr(T)
     GDvegaDvol = GVega(S, X, T, r, b, v) * d1 * d2 / v
     return GDvegaDvol
@@ -2304,7 +2390,7 @@ def GDvegaDvol(S: float, X: float, T: float, r: float, b: float, v: float):
 # DvegaPDvol/VommaP for the generalized Black and Scholes formula
 def GDvegaPDvol(S: float, X: float, T: float, r: float, b: float, v: float):
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     d2 = d1 - v * Sqr(T)
     GDvegaPDvol = GVegaP(S, X, T, r, b, v) * d1 * d2 / v
     return GDvegaPDvol
@@ -2313,7 +2399,7 @@ def GDvegaPDvol(S: float, X: float, T: float, r: float, b: float, v: float):
 # DvegaDtime for the generalized Black and Scholes formula
 def GDvegaDtime(S: float, X: float, T: float, r: float, b: float, v: float):
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     d2 = d1 - v * Sqr(T)
     GDvegaDtime = GVega(S, X, T, r, b, v) * (
         r - b + b * d1 / (v * Sqr(T)) - (1 + d1 * d2) / (2 * T)
@@ -2324,7 +2410,7 @@ def GDvegaDtime(S: float, X: float, T: float, r: float, b: float, v: float):
 # DVommaDVol for the generalized Black and Scholes formula
 def GDvommaDvol(S: float, X: float, T: float, r: float, b: float, v: float):
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     d2 = d1 - v * Sqr(T)
     GDvommaDvol = (
         GDvegaDvol(S, X, T, r, b, v) * 1 / v * (d1 * d2 - d1 / d2 - d2 / d1 - 1)
@@ -2335,7 +2421,7 @@ def GDvommaDvol(S: float, X: float, T: float, r: float, b: float, v: float):
 # GGammaDtime for the generalized Black and Scholes formula
 def GDgammaDtime(S: float, X: float, T: float, r: float, b: float, v: float):
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     d2 = d1 - v * Sqr(T)
     GDgammaDtime = GGamma(S, X, T, r, b, v) * (
         r - b + b * d1 / (v * Sqr(T)) + (1 - d1 * d2) / (2 * T)
@@ -2346,7 +2432,7 @@ def GDgammaDtime(S: float, X: float, T: float, r: float, b: float, v: float):
 # GGammaPDtime for the generalized Black and Scholes formula
 def GDgammaPDtime(S: float, X: float, T: float, r: float, b: float, v: float):
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     d2 = d1 - v * Sqr(T)
     GDgammaPDtime = GGammaP(S, X, T, r, b, v) * (
         r - b + b * d1 / (v * Sqr(T)) + (1 - d1 * d2) / (2 * T)
@@ -2368,7 +2454,7 @@ def GVegaLeverage(
 # Rho for the generalized Black and Scholes formula for all options except futures
 def GRho(CallPutFlag: str, S: float, X: float, T: float, r: float, b: float, v: float):
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     d2 = d1 - v * Sqr(T)
     if CallPutFlag == "c":
         GRho = T * X * Exp(-r * T) * CND(d2)
@@ -2389,7 +2475,7 @@ def GRhoFO(
 # Rho2/Phi for the generalized Black and Scholes formula
 def GPhi(CallPutFlag: str, S: float, X: float, T: float, r: float, b: float, v: float):
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     if CallPutFlag == "c":
         GPhi = -T * S * Exp((b - r) * T) * CND(d1)
     elif CallPutFlag == "p":
@@ -2402,7 +2488,7 @@ def GCarry(
     CallPutFlag: str, S: float, X: float, T: float, r: float, b: float, v: float
 ):
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T) / (v * Sqr(T))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T) / (v * Sqr(T))
     if CallPutFlag == "c":
         GCarry = T * S * Exp((b - r) * T) * CND(d1)
     elif CallPutFlag == "p":
@@ -2466,7 +2552,7 @@ def CNDEV(U: float):
 
 # The normal distribution function
 def ND(X: float) -> float:
-    ND = 1 / Sqr(2 * np.pi) * Exp(-X ^ 2 / 2)
+    ND = 1 / Sqr(2 * np.pi) * Exp(-(X ** 2) / 2)
     return ND
 
 
@@ -2482,64 +2568,58 @@ def PartialFixedLB(
     v: float,
 ):
 
-    d1 = (Log(S / X) + (b + v ^ 2 / 2) * T2) / (v * Sqr(T2))
+    d1 = (Log(S / X) + (b + v ** 2 / 2) * T2) / (v * Sqr(T2))
     d2 = d1 - v * Sqr(T2)
-    e1 = ((b + v ^ 2 / 2) * (T2 - t1)) / (v * Sqr(T2 - t1))
+    e1 = ((b + v ** 2 / 2) * (T2 - t1)) / (v * Sqr(T2 - t1))
     e2 = e1 - v * Sqr(T2 - t1)
-    f1 = (Log(S / X) + (b + v ^ 2 / 2) * t1) / (v * Sqr(t1))
+    f1 = (Log(S / X) + (b + v ** 2 / 2) * t1) / (v * Sqr(t1))
     f2 = f1 - v * Sqr(t1)
     if CallPutFlag == "c":
-        PartialFixedLB = S * Exp((b - r) * T2) * CND(d1) - Exp(-r * T2) * X * CND(
-            d2
-        ) + S * Exp(-r * T2) * v ^ 2 / (2 * b) * (
-            -(S / X)
-            ^ (-2 * b / v ^ 2)
-            * CBND(d1 - 2 * b * Sqr(T2) / v, -f1 + 2 * b * Sqr(t1) / v, -Sqr(t1 / T2))
-            + Exp(b * T2) * CBND(e1, d1, Sqr(1 - t1 / T2))
-        ) - S * Exp(
-            (b - r) * T2
-        ) * CBND(
-            -e1, d1, -Sqr(1 - t1 / T2)
-        ) - X * Exp(
-            -r * T2
-        ) * CBND(
-            f2, -d2, -Sqr(t1 / T2)
-        ) + Exp(
-            -b * (T2 - t1)
-        ) * (
-            1 - v ^ 2 / (2 * b)
-        ) * S * Exp(
-            (b - r) * T2
-        ) * CND(
-            f1
-        ) * CND(
-            -e2
+        PartialFixedLB = (
+            S * Exp((b - r) * T2) * CND(d1)
+            - Exp(-r * T2) * X * CND(d2)
+            + S
+            * Exp(-r * T2)
+            * v ** 2
+            / (2 * b)
+            * (
+                -((S / X) ** (-2 * b / v ** 2))
+                * CBND(
+                    d1 - 2 * b * Sqr(T2) / v, -f1 + 2 * b * Sqr(t1) / v, -Sqr(t1 / T2)
+                )
+                + Exp(b * T2) * CBND(e1, d1, Sqr(1 - t1 / T2))
+            )
+            - S * Exp((b - r) * T2) * CBND(-e1, d1, -Sqr(1 - t1 / T2))
+            - X * Exp(-r * T2) * CBND(f2, -d2, -Sqr(t1 / T2))
+            + Exp(-b * (T2 - t1))
+            * (1 - v ** 2 / (2 * b))
+            * S
+            * Exp((b - r) * T2)
+            * CND(f1)
+            * CND(-e2)
         )
     elif CallPutFlag == "p":
-        PartialFixedLB = X * Exp(-r * T2) * CND(-d2) - S * Exp((b - r) * T2) * CND(
-            -d1
-        ) + S * Exp(-r * T2) * v ^ 2 / (2 * b) * (
-            (S / X)
-            ^ (-2 * b / v ^ 2)
-            * CBND(-d1 + 2 * b * Sqr(T2) / v, f1 - 2 * b * Sqr(t1) / v, -Sqr(t1 / T2))
-            - Exp(b * T2) * CBND(-e1, -d1, Sqr(1 - t1 / T2))
-        ) + S * Exp(
-            (b - r) * T2
-        ) * CBND(
-            e1, -d1, -Sqr(1 - t1 / T2)
-        ) + X * Exp(
-            -r * T2
-        ) * CBND(
-            -f2, d2, -Sqr(t1 / T2)
-        ) - Exp(
-            -b * (T2 - t1)
-        ) * (
-            1 - v ^ 2 / (2 * b)
-        ) * S * Exp(
-            (b - r) * T2
-        ) * CND(
-            -f1
-        ) * CND(
-            e2
+        PartialFixedLB = (
+            X * Exp(-r * T2) * CND(-d2)
+            - S * Exp((b - r) * T2) * CND(-d1)
+            + S
+            * Exp(-r * T2)
+            * v ** 2
+            / (2 * b)
+            * (
+                (S / X) ** (-2 * b / v ** 2)
+                * CBND(
+                    -d1 + 2 * b * Sqr(T2) / v, f1 - 2 * b * Sqr(t1) / v, -Sqr(t1 / T2)
+                )
+                - Exp(b * T2) * CBND(-e1, -d1, Sqr(1 - t1 / T2))
+            )
+            + S * Exp((b - r) * T2) * CBND(e1, -d1, -Sqr(1 - t1 / T2))
+            + X * Exp(-r * T2) * CBND(-f2, d2, -Sqr(t1 / T2))
+            - Exp(-b * (T2 - t1))
+            * (1 - v ** 2 / (2 * b))
+            * S
+            * Exp((b - r) * T2)
+            * CND(-f1)
+            * CND(e2)
         )
     return PartialFixedLB

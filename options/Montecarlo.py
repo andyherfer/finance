@@ -1,9 +1,12 @@
+import random
+
 from KDEpy import FFTKDE
 from KDEpy.bw_selection import silvermans_rule, improved_sheather_jones
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
+from tqdm import tqdm
 
 from options_strategy import OptionsStrategy, BSOptionsStrategy
 
@@ -111,6 +114,7 @@ class OptionsMC(MonteCarlo):
     def __init__(self, series, sim_length=250 * 2, n_sims=1_000):
         super().__init__(series, sim_length, n_sims)
         self.options_strategy = OptionsStrategy()
+        self.max_loss = 0
 
     def plot_strategy(self, figsize=(12, 10), **kwargs):
         min_value = self.series.min() * 0.7
@@ -123,6 +127,10 @@ class OptionsMC(MonteCarlo):
 
     def remove(self, *args, **kwargs):
         self.options_strategy.remove(*args, **kwargs)
+        return self
+
+    def clear(self):
+        self.options_strategy.clear()
         return self
 
     def simulate(self):
@@ -142,7 +150,28 @@ class OptionsMC(MonteCarlo):
                 lambda price: self.options_strategy.get_profit(price)
             )
         )
+        self.get_max_loss(sims)
+        self.get_expected_utility(sims)
         return sims
+
+    def get_expected_utility(self, sims):
+        last_period = sims.iloc[-1]
+        expected_utility = last_period.mean()
+        expected_utility = expected_utility - sims.iloc[0, 0]
+        self.utility_obtained = expected_utility
+
+    def get_max_loss(self, sims):
+        """
+        The get_max_loss function returns the maximum loss of the strategy.
+
+        :param self: Access the attributes and methods of the class in python
+        :param sims: A pandas series with the profit for each simulation
+        :return: The maximum loss of the strategy
+        :doc-author: Trelent
+        """
+
+        self.max_loss = sims.min().min()
+        return self.max_loss
 
     def get_color(self, series):
         profit = series.iloc[-1]
@@ -165,8 +194,142 @@ class OptionsMC(MonteCarlo):
 
 
 class BSOptionsMC(OptionsMC):
-    def __init__(self, ticker, sim_length=250 * 2, n_sims=1_000):
-        options_strategy = BSOptionsStrategy(ticker, days=sim_length)
+    def __init__(
+        self,
+        ticker,
+        ticker_df=None,
+        sim_length=250 * 2,
+        n_sims=1_000,
+        start_date="29/03/2021",
+        r=0.04,
+        available_cash=150,
+    ):
+        options_strategy = BSOptionsStrategy(
+            ticker,
+            ticker_df=ticker_df,
+            days=sim_length,
+            start_date_for_data=start_date,
+            r=r,
+        )
         series = options_strategy.get_price_series()
         super().__init__(series, sim_length, n_sims)
         self.options_strategy = options_strategy
+        self.available_cash = available_cash
+
+    def is_a_priori_valid(self):
+        # Nos alcanzan las primas
+        cash_sum_condition = self.options_strategy.premium <= self.available_cash
+        valid_options = True
+        for option in self.options_strategy.options:
+            if option.premium <= 0:
+                valid_options = False
+        return valid_options and cash_sum_condition
+
+    def is_a_posteriori_valid(self):
+        # La perdida maxima es mayor a lo que podemos perder
+        return self.max_loss <= self.available_cash
+
+    def utility(self):
+        # Expected Return de la estrategia
+        return self.utility_obtained
+
+    def get_results(self):
+        self.simulate()
+        return {
+            "utility": self.utility(),
+            "is_valid": self.is_a_priori_valid(),
+            "is_valid_posteriori": self.is_a_posteriori_valid(),
+        }
+
+    def __repr__(self):
+        return "MC(" + str(self.options_strategy).split("(")[1]
+
+
+sides = ["short", "long"]
+kinds = ["put", "call"]
+conditions = ["vanilla", "down and out", "up and out", "down and in", "up and in"]
+barriers = [i / 100 for i in range(70, 140, 10)]
+combinations = [1, 2, 3, 4]
+kwargs_dict = {
+    "side": sides,
+    "kind": kinds,
+    "condition": conditions,
+    "barrier": barriers,
+}
+
+
+class GridSearch:
+    def __init__(
+        self, ticker, kwargs_dict=kwargs_dict, combinations_to_search=combinations
+    ):
+        self.kwargs_dict = kwargs_dict
+        self.combinations_to_search = combinations_to_search
+        self.combinations_searched = {}
+        self.results = {}
+        self.ticker = ticker
+        strategy = BSOptionsStrategy(ticker)
+        self.ticker_df = strategy.ticker_df
+
+        self.combination_to_search_index = 0
+        self.competed = False
+
+    def _get_random_kwargs(self):
+        new_kwargs = {}
+        kwargs_id = ""
+        for key, list_ in self.kwargs_dict.items():
+            item = random.choice(list_)
+            new_kwargs[key] = item
+            kwargs_id = kwargs_id + str(item)
+        return new_kwargs, kwargs_id
+
+    def get_random_kwargs(self, retries=5):
+        for i in range(retries):
+            option_kwargs = []
+            options_id = []
+            for i in range(
+                self.combinations_to_search[self.combination_to_search_index]
+            ):
+                new_kwargs, kwargs_id = self._get_random_kwargs()
+                option_kwargs.append(new_kwargs)
+                options_id.append(kwargs_id)
+            options_id = "".join(sorted(options_id))
+            if options_id in self.combinations_searched.keys():
+                continue
+            else:
+                return option_kwargs, options_id
+
+        self.combination_to_search_index += 1
+        if self.combination_to_search_index >= len(self.combinations_to_search):
+            self.combination_to_search_index = 0
+            return None, None
+        else:
+            return self.get_random_kwargs(retries)
+
+    def setup_sims(self):
+        new_kwargs, kwargs_id = self.get_random_kwargs()
+        while kwargs_id is not None:
+            self.combinations_searched[kwargs_id] = BSOptionsMC(
+                ticker=self.ticker, ticker_df=self.ticker_df, n_sims=1000
+            )
+            for kwargs in new_kwargs:
+                self.combinations_searched[kwargs_id].add(**kwargs)
+
+            new_kwargs, kwargs_id = self.get_random_kwargs()
+
+    def search(self):
+        self.setup_sims()
+        for key, mc in tqdm(self.combinations_searched.items()):
+            self.results[key] = mc.get_results()
+        self.results = pd.DataFrame(self.results).T
+        self.competed = True
+
+    def get_top(self, k=3):
+        results = self.results[
+            self.results["is_valid"] & (self.results["is_valid_posteriori"])
+        ]
+        results = results.sort_values("utility", ascending=False)
+        results = results.head(k)
+        top_k = []
+        for i in results.index:
+            top_k.append(self.combinations_searched[i])
+        return top_k

@@ -1,10 +1,10 @@
-import matplotlib.pyplot as plt
+import re
 
-from black_and_scholes import BlackAndScholes
+import matplotlib.pyplot as plt
 
 
 class Option:
-    def __init__(self, strike, premium, side="long", kind="call"):
+    def __init__(self, strike, premium, side="long", kind="call", **kwargs):
         """
         The __init__ function is called every time a new object is created.
         The values we pass to __init__ are stored in the object and can be accessed later
@@ -56,6 +56,80 @@ class Option:
         return f"Option(strike={self.strike}, premium={self.premium}, side={self.side}, kind={self.kind})"
 
 
+class ExoticOption(Option):
+    def __init__(
+        self,
+        strike,
+        premium=None,
+        side="long",
+        kind="call",
+        condition=None,
+        barrier=None,
+    ):
+        self.strike = strike
+        self.premium = premium if premium is not None else 0
+        self.side = side
+        self.kind = kind
+        if condition is not None:
+            assert barrier is not None
+
+        self.condition = self.parse_condition(condition)
+        self.barrier = barrier
+        self.price_barrier = self.get_price_barrier()
+
+    def parse_condition(self, condition):
+        if self.kind == "call":
+            key = "c"
+        else:
+            key = "p"
+        if re.search(r"[Uu][pP]", condition):
+            key += "u"
+        else:
+            key += "d"
+        if re.search(r"[iI][nN]", condition):
+            key += "i"
+        else:
+            key += "o"
+        return key
+
+    def get_price_barrier(self):
+        if "u" in self.condition:
+            price_barrier = self.strike * self.barrier
+        else:
+            price_barrier = self.strike * self.barrier
+
+        return price_barrier
+
+    def get_profit(self, current_value):
+        regular_profit = super().get_profit(current_value)
+        if self.condition.endswith("di"):
+            if current_value < self.price_barrier:
+                return regular_profit
+            else:
+                return super().get_profit(self.strike)
+
+        elif self.condition.endswith("ui"):
+            if current_value > self.price_barrier:
+                return regular_profit
+            else:
+                return super().get_profit(self.strike)
+
+        elif self.condition.endswith("do"):
+            if current_value > self.price_barrier:
+                return regular_profit
+            else:
+                return super().get_profit(self.strike)
+
+        elif self.condition.endswith("uo"):
+            if current_value < self.price_barrier:
+                return regular_profit
+            else:
+                return super().get_profit(self.strike)
+
+    def __repr__(self):
+        return f"ExoticOption(strike={self.strike}, premium={self.premium}, side={self.side}, kind={self.kind}, condition={self.condition}, barrier={self.barrier:.2%})"
+
+
 class OptionsStrategy:
     def __init__(self):
         self.options = []
@@ -79,7 +153,10 @@ class OptionsStrategy:
         :return: The object of the class
         :doc-author: Trelent
         """
-        option = Option(*args, **kwargs)
+        if "condition" in kwargs:
+            option = ExoticOption(*args, **kwargs)
+        else:
+            option = Option(*args, **kwargs)
         self.premium += option.premium
         self.options.append(option)
         return self
@@ -122,13 +199,27 @@ class OptionsStrategy:
 
 
 class BSOptionsStrategy(OptionsStrategy):
-    def __init__(self, ticker, start_date_for_data="29/03/2021", r=0.01988, days=365):
+    def __init__(
+        self,
+        ticker=None,
+        ticker_df=None,
+        start_date_for_data="29/03/2021",
+        r=0.04,
+        days=365,
+    ):
+        from black_and_scholes_alan_genz import BlackAndScholes
+
         super().__init__()
         self.ticker = ticker
-        self.b_and_s = BlackAndScholes(
-            ticker, start_date_for_data=start_date_for_data, r=r, days=days
-        )
+        if ticker_df is None:
+            self.b_and_s = BlackAndScholes(
+                ticker, start_date_for_data=start_date_for_data, r=r, days=days
+            )
+        else:
+            self.b_and_s = BlackAndScholes(ticker, ticker_df=ticker_df, r=r, days=days)
+        self.ticker_df = self.b_and_s.ticker_df
         self.premium = 0
+        self.last_price = self.b_and_s.last_price
 
     def add(self, *args, **kwargs):
         """
@@ -142,6 +233,27 @@ class BSOptionsStrategy(OptionsStrategy):
         :return: The object of the class
         :doc-author: Trelent
         """
+        if "condition" in kwargs:
+            if kwargs["condition"] == "vanilla":
+                self.add_vanilla(*args, **kwargs)
+            else:
+                self.add_exotic(*args, **kwargs)
+        else:
+            self.add_vanilla(*args, **kwargs)
+        return self
+
+    def add_exotic(self, *args, **kwargs):
+        if "strike" not in kwargs:
+            kwargs["strike"] = self.last_price
+        dummy_option = ExoticOption(*args, **kwargs)
+        premium = self.b_and_s.price_exotic(dummy_option)
+        kwargs["premium"] = premium
+        option = ExoticOption(*args, **kwargs)
+        self.premium += option.premium
+        self.options.append(option)
+        return self
+
+    def add_vanilla(self, *args, **kwargs):
         if "strike" not in kwargs and "premium" not in kwargs:
             kwargs["strike"] = self.b_and_s.last_price
         if "strike" not in kwargs and "premium" in kwargs:
