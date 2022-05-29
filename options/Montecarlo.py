@@ -111,10 +111,11 @@ class MonteCarlo:
 class OptionsMC(MonteCarlo):
     asset = "options"
 
-    def __init__(self, series, sim_length=250 * 2, n_sims=1_000):
+    def __init__(self, series, sim_length=250 * 2, n_sims=1_000, price_sims=None):
         super().__init__(series, sim_length, n_sims)
         self.options_strategy = OptionsStrategy()
         self.max_loss = 0
+        self.price_sims = price_sims
 
     def plot_strategy(self, figsize=(12, 10), **kwargs):
         min_value = self.series.min() * 0.7
@@ -143,8 +144,12 @@ class OptionsMC(MonteCarlo):
         :return: A pandas series with the profit for each simulation
         :doc-author: Trelent
         """
+        if self.price_sims is None:
+            sims = super().simulate()
+            self.price_sims = sims
+        else:
+            sims = self.price_sims
 
-        sims = super().simulate()
         sims = sims.apply(
             lambda series: series.apply(
                 lambda price: self.options_strategy.get_profit(price)
@@ -203,6 +208,7 @@ class BSOptionsMC(OptionsMC):
         start_date="29/03/2021",
         r=0.04,
         available_cash=150,
+        price_sims=None,
     ):
         options_strategy = BSOptionsStrategy(
             ticker,
@@ -212,7 +218,7 @@ class BSOptionsMC(OptionsMC):
             r=r,
         )
         series = options_strategy.get_price_series()
-        super().__init__(series, sim_length, n_sims)
+        super().__init__(series, sim_length, n_sims, price_sims=price_sims)
         self.options_strategy = options_strategy
         self.available_cash = available_cash
 
@@ -249,7 +255,7 @@ sides = ["short", "long"]
 kinds = ["put", "call"]
 conditions = ["vanilla", "down and out", "up and out", "down and in", "up and in"]
 barriers = [i / 100 for i in range(70, 140, 10)]
-combinations = [1, 2, 3, 4]
+combinations = [1, 2, 3]
 kwargs_dict = {
     "side": sides,
     "kind": kinds,
@@ -260,7 +266,11 @@ kwargs_dict = {
 
 class GridSearch:
     def __init__(
-        self, ticker, kwargs_dict=kwargs_dict, combinations_to_search=combinations
+        self,
+        ticker,
+        kwargs_dict=kwargs_dict,
+        combinations_to_search=combinations,
+        n_sims=1_000,
     ):
         self.kwargs_dict = kwargs_dict
         self.combinations_to_search = combinations_to_search
@@ -272,6 +282,9 @@ class GridSearch:
 
         self.combination_to_search_index = 0
         self.competed = False
+        mc = BSOptionsMC(ticker=self.ticker, ticker_df=self.ticker_df, n_sims=n_sims)
+        mc.simulate()
+        self.price_sims = mc.price_sims
 
     def _get_random_kwargs(self):
         new_kwargs = {}
@@ -309,7 +322,7 @@ class GridSearch:
         new_kwargs, kwargs_id = self.get_random_kwargs()
         while kwargs_id is not None:
             self.combinations_searched[kwargs_id] = BSOptionsMC(
-                ticker=self.ticker, ticker_df=self.ticker_df, n_sims=1000
+                ticker=self.ticker, ticker_df=self.ticker_df, price_sims=self.price_sims
             )
             for kwargs in new_kwargs:
                 self.combinations_searched[kwargs_id].add(**kwargs)
