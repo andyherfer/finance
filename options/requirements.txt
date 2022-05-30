@@ -1,0 +1,9 @@
+matplotlib
+KDEpy
+pandas
+numpy
+seaborn
+tqdm
+scipy
+investpy
+pyportfolioopt

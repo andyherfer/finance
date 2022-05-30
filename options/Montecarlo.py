@@ -149,7 +149,6 @@ class OptionsMC(MonteCarlo):
             self.price_sims = sims
         else:
             sims = self.price_sims
-
         sims = sims.apply(
             lambda series: series.apply(
                 lambda price: self.options_strategy.get_profit(price)
@@ -163,7 +162,8 @@ class OptionsMC(MonteCarlo):
         last_period = sims.iloc[-1]
         expected_utility = last_period.mean()
         expected_utility = expected_utility - sims.iloc[0, 0]
-        self.utility_obtained = expected_utility
+        win_percentage = len(last_period[last_period > 0]) / len(last_period)
+        self.utility_obtained = expected_utility * win_percentage
 
     def get_max_loss(self, sims):
         """
@@ -255,7 +255,8 @@ sides = ["short", "long"]
 kinds = ["put", "call"]
 conditions = ["vanilla", "down and out", "up and out", "down and in", "up and in"]
 barriers = [i / 100 for i in range(70, 140, 10)]
-combinations = [1, 2, 3]
+combinations = [2, 3]
+max_strategies = 10000
 kwargs_dict = {
     "side": sides,
     "kind": kinds,
@@ -270,7 +271,8 @@ class GridSearch:
         ticker,
         kwargs_dict=kwargs_dict,
         combinations_to_search=combinations,
-        n_sims=1_000,
+        n_sims=100,
+        max_strategies=max_strategies,
     ):
         self.kwargs_dict = kwargs_dict
         self.combinations_to_search = combinations_to_search
@@ -281,10 +283,10 @@ class GridSearch:
         self.ticker_df = strategy.ticker_df
 
         self.combination_to_search_index = 0
-        self.competed = False
         mc = BSOptionsMC(ticker=self.ticker, ticker_df=self.ticker_df, n_sims=n_sims)
         mc.simulate()
         self.price_sims = mc.price_sims
+        self.max_strategies = max_strategies
 
     def _get_random_kwargs(self):
         new_kwargs = {}
@@ -295,7 +297,7 @@ class GridSearch:
             kwargs_id = kwargs_id + str(item)
         return new_kwargs, kwargs_id
 
-    def get_random_kwargs(self, retries=5):
+    def get_random_kwargs(self, retries=2):
         for i in range(retries):
             option_kwargs = []
             options_id = []
@@ -314,6 +316,8 @@ class GridSearch:
         self.combination_to_search_index += 1
         if self.combination_to_search_index >= len(self.combinations_to_search):
             self.combination_to_search_index = 0
+            return None, None
+        if len(self.combinations_searched) >= self.max_strategies:
             return None, None
         else:
             return self.get_random_kwargs(retries)
