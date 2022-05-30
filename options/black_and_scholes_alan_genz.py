@@ -97,7 +97,7 @@ def price_exotic(
     barrier,
     rebate=0,
     days=365,
-    cc_rate=4 / 100,
+    cc_rate=8.84 / 100,
     cc_carry=4 / 100,
 ):
     asset_price = asset_series[-1]
@@ -128,7 +128,7 @@ class BlackAndScholes:
         ticker_df=None,
         start_date_for_data="29/03/2021",
         strike=None,
-        r=0.01988,
+        r=8.84 / 100,
         days=365,
     ):
         self.ticker = ticker
@@ -162,9 +162,7 @@ class BlackAndScholes:
         strike = self.strike if strike is None else strike
         return price_option(self.ticker_df, strike, r, days)
 
-    def price_exotic(
-        self, dummy_option: ExoticOption, rebate=0, cc_rate=4 / 100, cc_carry=4 / 100
-    ):
+    def price_exotic(self, dummy_option: ExoticOption, rebate=0, cc_carry=4 / 100):
         strike = dummy_option.strike
         condition = dummy_option.condition
         barrier = dummy_option.barrier
@@ -175,7 +173,7 @@ class BlackAndScholes:
             barrier,
             rebate=rebate,
             days=self.days,
-            cc_rate=cc_rate,
+            cc_rate=self.r,
             cc_carry=cc_carry,
         )
 

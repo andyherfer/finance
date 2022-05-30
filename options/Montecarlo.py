@@ -10,6 +10,9 @@ from tqdm import tqdm
 
 from options_strategy import OptionsStrategy, BSOptionsStrategy
 
+PROFIT_COLOR = "#002856"
+LOSS_COLOR = "#f99e74"
+
 
 class kde:
     def __init__(self, series):
@@ -62,7 +65,7 @@ class MonteCarlo:
         samples.sort_index(inplace=True)
         return samples.cumprod()
 
-    def display(self):
+    def display(self, mc=True, percentiles=True, hist=True):
         """
         The display function displays the results of the Monte Carlo simulation.
         It displays a histogram of the percentiles and prints out a table with
@@ -73,29 +76,60 @@ class MonteCarlo:
         """
 
         self.sims = self.simulate()
-        self.plot_mc_brute()
-        self.plot_mc_percentiles()
-        self.plot_mc_hist()
+        if mc:
+            self.plot_mc_brute()
+        if percentiles:
+            self.plot_mc_percentiles()
+        if hist:
+            self.plot_mc_hist()
 
     def plot_mc_brute(self, figsize=(12, 10), **kwargs):
         fig, ax = plt.subplots(figsize=figsize)
         for sim in self.sims:
             data_series = self.sims[sim]
             color = self.get_color(data_series)
-            ax.plot(data_series, alpha=1 / np.sqrt(self.n_sims), color=color, **kwargs)
+            if self.n_sims > 200:
+                alpha = 1 / np.sqrt(self.n_sims)
+            else:
+                alpha = 0.6
+            ax.plot(data_series, alpha=alpha, color=color, **kwargs)
         ax.hlines(0, data_series.index[0], data_series.index[-1], color="black")
+        # Drop Axis lines
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["left"].set_visible(False)
+        ax.spines["bottom"].set_visible(False)
+        # Change ticks font size
+        for tick in ax.xaxis.get_major_ticks():
+            tick.label.set_fontsize(12)
+        for tick in ax.yaxis.get_major_ticks():
+            tick.label.set_fontsize(12)
+
         plt.show()
 
     def get_color(self, series):
         start_price = series.iloc[0]
         end_price = series.iloc[-1]
-        color = "green" if end_price > start_price else "red"
+        color = PROFIT_COLOR if end_price > start_price else LOSS_COLOR
         return color
 
     def plot_mc_percentiles(self, figsize=(12, 10), **kwargs):
         fig, ax = plt.subplots(figsize=figsize)
-        self.sims.T.describe().loc[["25%", "50%", "75%"]].T.plot(ax=ax, **kwargs)
+        self.sims.T.describe().loc[["75%", "50%", "25%"]].T.plot(
+            ax=ax, color=[LOSS_COLOR, PROFIT_COLOR, LOSS_COLOR], **kwargs
+        )
         ax.hlines(0, self.sims.index[0], self.sims.index[-1], color="black")
+        # Drop Axis lines
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["left"].set_visible(False)
+        ax.spines["bottom"].set_visible(False)
+        # Change ticks font size
+        for tick in ax.xaxis.get_major_ticks():
+            tick.label.set_fontsize(12)
+        for tick in ax.yaxis.get_major_ticks():
+            tick.label.set_fontsize(12)
+
         plt.show()
 
     def plot_mc_hist(self, figsize=(12, 10), **kwargs):
@@ -104,7 +138,26 @@ class MonteCarlo:
         elif self.asset == "options":
             hist = self.sims.iloc[-1]
         fig, ax = plt.subplots(figsize=figsize)
-        sns.histplot(hist, ax=ax, bins=int(np.sqrt(self.n_sims)), kde=True, **kwargs)
+        hist.name = "Profit at Maturity"
+        sns.histplot(
+            hist,
+            ax=ax,
+            bins=int(np.sqrt(self.n_sims)),
+            kde=True,
+            color="#f99e74",
+            **kwargs,
+        )
+        ax.lines[0].set_color(PROFIT_COLOR)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["left"].set_visible(False)
+        ax.spines["bottom"].set_visible(False)
+        # Change ticks font size
+        for tick in ax.xaxis.get_major_ticks():
+            tick.label.set_fontsize(12)
+        for tick in ax.yaxis.get_major_ticks():
+            tick.label.set_fontsize(12)
+
         plt.show()
 
 
@@ -181,10 +234,10 @@ class OptionsMC(MonteCarlo):
     def get_color(self, series):
         profit = series.iloc[-1]
         if profit > 0:
-            return "green"
-        return "red"
+            return PROFIT_COLOR
+        return LOSS_COLOR
 
-    def display(self):
+    def display(self,strategy=True, **kwargs):
         """
         The display function plots the strategies of each player and the payoff matrix.
 
@@ -193,9 +246,9 @@ class OptionsMC(MonteCarlo):
         :return: The plot of the strategy
         :doc-author: Trelent
         """
-
-        self.plot_strategy()
-        super().display()
+        if strategy:
+            self.plot_strategy()
+        super().display(**kwargs)
 
 
 class BSOptionsMC(OptionsMC):
@@ -206,7 +259,7 @@ class BSOptionsMC(OptionsMC):
         sim_length=250 * 2,
         n_sims=1_000,
         start_date="29/03/2021",
-        r=0.04,
+        r=8.84 / 100,
         available_cash=150,
         price_sims=None,
     ):
@@ -218,6 +271,7 @@ class BSOptionsMC(OptionsMC):
             r=r,
         )
         series = options_strategy.get_price_series()
+        self.last_price = series[-1]
         super().__init__(series, sim_length, n_sims, price_sims=price_sims)
         self.options_strategy = options_strategy
         self.available_cash = available_cash
@@ -248,7 +302,7 @@ class BSOptionsMC(OptionsMC):
         }
 
     def __repr__(self):
-        return "MC(" + str(self.options_strategy).split("(")[1]
+        return "MC(" + "(".join(str(self.options_strategy).split("(")[1:])
 
 
 sides = ["short", "long"]
