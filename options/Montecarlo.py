@@ -237,7 +237,7 @@ class OptionsMC(MonteCarlo):
             return PROFIT_COLOR
         return LOSS_COLOR
 
-    def display(self,strategy=True, **kwargs):
+    def display(self, strategy=True, **kwargs):
         """
         The display function plots the strategies of each player and the payoff matrix.
 
@@ -256,7 +256,7 @@ class BSOptionsMC(OptionsMC):
         self,
         ticker,
         ticker_df=None,
-        sim_length=250 * 2,
+        sim_length=365 * 2,
         n_sims=1_000,
         start_date="29/03/2021",
         r=8.84 / 100,

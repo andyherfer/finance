@@ -35,13 +35,16 @@ def with_recursionlimit(limit):
 
 
 def get_volatity(series):
-    price_mu = series.mean()
-    range = series.max() - series.min()
-    sigma = range / price_mu
-    return sigma
+    price_mu = series.iloc[-60:].mean()
+    range = series.iloc[-60:].max() - series.iloc[-60:].min()
+    range_sigma = range / price_mu
+    std_sigma = series.iloc[-60:].pct_change().std()
+    bloomberg_sigma = 6.679 / 100
+    # return sigma
+    return bloomberg_sigma
 
 
-def price_option(ticker_df, strike=None, r=0.01988, days=365):
+def price_option(ticker_df, strike=None, r=0.01988, days=365, carry=0):
     """
     The price_option function computes the price of a call or put option given
     the following parameters:
@@ -57,17 +60,21 @@ def price_option(ticker_df, strike=None, r=0.01988, days=365):
     :param days=365: Calculate the time to maturity of the option
     :return: A dictionary with the results of the calculation
     """
-
     t = days / 365
     df = ticker_df.copy()
     results = {}
-    price_mu = df["Close"].mean()
-    range = df["Close"].max() - df["Close"].min()
+    price_mu = df["Close"].iloc[-60:].mean()
+    range = df["Close"].iloc[-60:].max() - df["Close"].iloc[-60:].min()
     sigma = range / price_mu  # la volatilidad del bien subyacente
     S = df["Close"][-1]  # El valor del bien subyacente
     K = S if strike is None else strike  # el precio de ejercicio de la opción
     results["Sigma"] = sigma
     results["Strike"] = K
+    call = GBlackScholes("c", S, K, t, r, carry, sigma)
+    put = GBlackScholes("p", S, K, t, r, carry, sigma)
+    results["call"] = call
+    results["put"] = put
+    return results
 
     d1 = (np.log(S / K) + (r + (sigma ** 2) / 2) * t) / (sigma * np.sqrt(t))
     d2 = d1 - sigma * np.sqrt(t)
@@ -129,12 +136,13 @@ class BlackAndScholes:
         start_date_for_data="29/03/2021",
         strike=None,
         r=8.84 / 100,
-        days=365,
+        days=365 * 2,
     ):
         self.ticker = ticker
         self.start_date_for_data = start_date_for_data
         self.strike = strike
         self.r = r
+        # self.r = 2.866 / 100
         self.days = days
         if ticker_df is None:
             self.ticker_df = get_df(ticker, start_date_for_data)
@@ -143,6 +151,8 @@ class BlackAndScholes:
         self.last_price = self.ticker_df["Close"][-1]
         self.price_series = self.ticker_df["Close"]
         self.volatility = get_volatity(self.price_series)
+        print(self.volatility)
+        # self.volatility = 6.669 / 100
 
     def price(self, r=None, days=None, strike=None):
         """

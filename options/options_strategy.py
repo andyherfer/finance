@@ -2,6 +2,9 @@ import re
 
 import matplotlib.pyplot as plt
 
+PROFIT_COLOR = "#002856"
+LOSS_COLOR = "#f99e74"
+
 
 class Option:
     def __init__(self, strike, premium, side="long", kind="call", **kwargs):
@@ -174,7 +177,8 @@ class OptionsStrategy:
         self.premium = 0
 
     def __repr__(self):
-        return f"OptionsStrategy({self.options})"
+        options = "\n".join([str(i) for i in self.options])
+        return f"OptionsStrategy([{options}])"
 
     def plot(self, start=None, end=None, fig_size=(12, 12), **kwargs):
         if start is None:
@@ -185,15 +189,32 @@ class OptionsStrategy:
         fig, ax = plt.subplots(figsize=fig_size)
         for option in self.options:
             option.plot(
-                start, end, ax=ax, linestyle="dashed", label=str(option), **kwargs
+                start,
+                end,
+                ax=ax,
+                linestyle="dashed",
+                label=str(option),
+                color=LOSS_COLOR,
+                **kwargs,
             )
 
         ax.plot(
             range(start, end),
             [self.get_profit(current_value) for current_value in range(start, end)],
             label="Strategy",
+            color=PROFIT_COLOR,
             **kwargs,
         )
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["left"].set_visible(False)
+        ax.spines["bottom"].set_visible(False)
+        # Change ticks font size
+        for tick in ax.xaxis.get_major_ticks():
+            tick.label.set_fontsize(12)
+        for tick in ax.yaxis.get_major_ticks():
+            tick.label.set_fontsize(12)
+
         ax.legend()
         return ax
 
