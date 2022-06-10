@@ -216,7 +216,7 @@ class OptionsStrategy:
             tick.label.set_fontsize(12)
 
         ax.legend()
-        return ax
+        return fig, ax
 
 
 class BSOptionsStrategy(OptionsStrategy):
@@ -225,8 +225,8 @@ class BSOptionsStrategy(OptionsStrategy):
         ticker=None,
         ticker_df=None,
         start_date_for_data="29/03/2021",
-        r=0.04,
-        days=365,
+        r=8.84 / 100,
+        days=365 * 2,
     ):
         from black_and_scholes_alan_genz import BlackAndScholes
 

@@ -147,7 +147,8 @@ class MonteCarlo:
             color="#f99e74",
             **kwargs,
         )
-        ax.lines[0].set_color(PROFIT_COLOR)
+        if len(ax.lines) > 0:
+            ax.lines[0].set_color(PROFIT_COLOR)
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
         ax.spines["left"].set_visible(False)
@@ -249,6 +250,30 @@ class OptionsMC(MonteCarlo):
         if strategy:
             self.plot_strategy()
         super().display(**kwargs)
+        self.plot_strategy_with_prices()
+
+    def plot_strategy_with_prices(self, **kwargs):
+        last_price_asset = self.price_sims.iloc[-1]
+        last_price_asset.name = "Asset Price"
+        min_price = int(np.min(last_price_asset))
+        max_price = int(np.max(last_price_asset))
+        fig, ax = self.options_strategy.plot(int(min_price), int(max_price), **kwargs)
+        # Histplot with the y axis on the right on top of the strategy plot
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["left"].set_visible(False)
+        ax.spines["bottom"].set_visible(False)
+
+        percentile_25 = np.percentile(last_price_asset, 25)
+        percentile_50 = np.percentile(last_price_asset, 50)
+        percentile_75 = np.percentile(last_price_asset, 75)
+
+        # Plot Percentiles as vertical lines
+        ax.axvline(percentile_25, color="#f99e74", linestyle="--")
+        ax.axvline(percentile_50, color="#f99e74", linestyle="--")
+        ax.axvline(percentile_75, color="#f99e74", linestyle="--")
+
+        plt.show()
 
 
 class BSOptionsMC(OptionsMC):

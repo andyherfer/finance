@@ -34,17 +34,17 @@ def with_recursionlimit(limit):
     return decorator
 
 
-def get_volatity(series):
-    price_mu = series.iloc[-60:].mean()
-    range = series.iloc[-60:].max() - series.iloc[-60:].min()
+def get_volatity(series, n_periods=60):
+    price_mu = series.iloc[-n_periods:].mean()
+    range = series.iloc[-n_periods:].max() - series.iloc[-n_periods:].min()
     range_sigma = range / price_mu
-    std_sigma = series.iloc[-60:].pct_change().std()
+    std_sigma = series.iloc[-n_periods:].pct_change().std()
     bloomberg_sigma = 6.679 / 100
     # return sigma
-    return bloomberg_sigma
+    return std_sigma
 
 
-def price_option(ticker_df, strike=None, r=0.01988, days=365, carry=0):
+def price_option(ticker_df, strike=None, r=0.01988, days=365, carry=8.84 / 100):
     """
     The price_option function computes the price of a call or put option given
     the following parameters:
@@ -105,7 +105,7 @@ def price_exotic(
     rebate=0,
     days=365,
     cc_rate=8.84 / 100,
-    cc_carry=4 / 100,
+    cc_carry=8.84 / 100,
 ):
     asset_price = asset_series[-1]
     scalar_strike = strike
@@ -172,10 +172,12 @@ class BlackAndScholes:
         strike = self.strike if strike is None else strike
         return price_option(self.ticker_df, strike, r, days)
 
-    def price_exotic(self, dummy_option: ExoticOption, rebate=0, cc_carry=4 / 100):
+    def price_exotic(self, dummy_option: ExoticOption, rebate=0, cc_carry=None):
         strike = dummy_option.strike
         condition = dummy_option.condition
         barrier = dummy_option.barrier
+        if cc_carry is None:
+            cc_carry = self.r
         return price_exotic(
             condition,
             self.price_series,
